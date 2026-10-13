@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Env & secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Pipeline data
+data/input/*
+!data/input/.gitkeep
+data/output/*
+!data/output/.gitkeep
+data/cache/*
+!data/cache/.gitkeep
+
+# Sessions & cookies
+*.session
+*.cookie
+cookies/
+sessions/
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
