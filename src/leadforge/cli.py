@@ -4,6 +4,7 @@ import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -12,9 +13,12 @@ from leadforge import __version__
 from leadforge.config import settings
 from leadforge.db import connect, init_schema, schema_version
 from leadforge.llm import LLMNotConfigured, LLMOutputError, chat_json
-from leadforge.llm.prompts import PROMPT_VERSION
+from leadforge.llm.prompts import PROMPT_VERSION, SYSTEM_PROMPT
 from leadforge.llm.schemas import PingResponse
 from leadforge.models import Contact, EmailCandidate
+from leadforge.stages.pattern_learn import is_established
+from leadforge.stages.replay import ReplayFetcher
+from leadforge.stages.walk import WalkBudget, WalkResult, seed_urls, walk_person
 from leadforge.tools.smtp_verify import Port25Status, check_port25_status, verify_candidates
 from leadforge.web.denylist import load_denylist
 from leadforge.web.errors import FetchError
@@ -169,6 +173,181 @@ def llm_ping() -> None:
 def verify(csv_path: Path) -> None:
     """Verify candidate addresses from a CSV without sending email."""
     asyncio.run(_verify_csv(csv_path))
+
+
+@app.command("walk")
+def walk_command(
+    company_domain: str = typer.Option(..., "--company-domain"),
+    first: str = typer.Option(..., "--first"),
+    last: str = typer.Option(..., "--last"),
+    title: str = typer.Option("", "--title"),
+    replay: Annotated[Path | None, typer.Option("--replay", exists=True, file_okay=False)] = None,
+) -> None:
+    """Run a bounded person walk; --replay serves fixture pages without network access."""
+    contact = Contact(
+        first_name=first,
+        last_name=last,
+        domain=company_domain,
+        company=company_domain,
+        title=title or None,
+        source="walk",
+    )
+    if replay is not None:
+        replay_fetcher = ReplayFetcher(replay)
+
+        async def offline_llm(**kwargs):
+            raise LLMNotConfigured("Replay mode uses deterministic link ranking")
+
+        async def offline_verify(candidates):
+            return candidates
+
+        fetch_fn = replay_fetcher
+        llm_fn = offline_llm
+        verify_fn = offline_verify
+        starts = replay_fetcher.seeds or seed_urls(company_domain)
+    else:
+        fetcher = Fetcher(settings)
+
+        async def live_llm(**kwargs):
+            from leadforge.llm.prompts import build_user_message
+            from leadforge.llm.schemas import PageExtraction
+
+            return await chat_json(
+                SYSTEM_PROMPT,
+                build_user_message(
+                    person_name=contact.full_name,
+                    company=contact.company or company_domain,
+                    role=contact.title or "",
+                    page_text=kwargs["page_text"],
+                    candidate_links=kwargs["candidate_links"],
+                ),
+                PageExtraction,
+                settings=settings,
+                prompt_version=PROMPT_VERSION,
+            )
+
+        async def fetch_fn(url: str):
+            return await fetcher.fetch(url)
+
+        llm_fn = live_llm
+
+        async def verify_fn(candidates: list[EmailCandidate]):
+            return await verify_candidates(contact, candidates, settings)
+        starts = seed_urls(company_domain)
+    try:
+        result = asyncio.run(
+            walk_person(
+                person_id=0,
+                contact=contact,
+                fetch_fn=fetch_fn,
+                llm_fn=llm_fn,
+                verify_fn=verify_fn,
+                budget=WalkBudget(
+                    settings.walk_max_fetches,
+                    settings.walk_max_depth,
+                    settings.walk_stale_hops,
+                    settings.walk_wall_clock_seconds,
+                ),
+                seed_urls_override=starts,
+                denylist_hosts=load_denylist(settings.denylist_hosts_path),
+                persist_fn=_persist_walk_result,
+                min_confidence_to_emit=settings.min_confidence_to_emit,
+                established_pattern=(
+                    None if replay is not None else _established_pattern(company_domain)
+                ),
+            )
+        )
+    except LLMNotConfigured:
+        console.print("LLM not configured; heuristic walk unavailable for this page")
+        raise typer.Exit(code=1) from None
+    console.print(
+        f"Walk {result.status}: stop={result.stop_reason}, "
+        f"pages={len(result.pages_visited)}, candidates={len(result.candidates)}"
+    )
+    for candidate in result.candidates:
+        console.print(
+            f"  {candidate.email} tier={candidate.evidence_tier} "
+            f"verdict={candidate.verification_verdict.value} confidence={candidate.confidence:.2f}"
+        )
+
+
+def _persist_walk_result(result: WalkResult) -> None:
+    """Upsert the person state and persist candidate/evidence provenance locally."""
+    now = datetime.now(UTC).isoformat()
+    conn = connect(settings.db_path)
+    try:
+        init_schema(conn)
+        candidate = result.candidates[0] if result.candidates else None
+        contact = candidate.contact if candidate else None
+        if contact is None:
+            return
+        company = conn.execute(
+            "SELECT id FROM company WHERE domain=?", (contact.domain.lower(),)
+        ).fetchone()
+        if company:
+            company_id = int(company["id"])
+        else:
+            company_id = int(conn.execute(
+                "INSERT INTO company(name,domain,source,created_at) VALUES(?,?,?,?)",
+                (contact.company or contact.domain, contact.domain.lower(), "walk", now),
+            ).lastrowid)
+        person = conn.execute(
+            "SELECT id FROM person WHERE company_id=? AND first_name=? AND last_name=? "
+            "ORDER BY id LIMIT 1",
+            (company_id, contact.first_name, contact.last_name),
+        ).fetchone()
+        if person:
+            person_id = int(person["id"])
+            conn.execute(
+                "UPDATE person SET title=?,status=?,stop_reason=?,updated_at=? WHERE id=?",
+                (contact.title, result.status, result.stop_reason, now, person_id),
+            )
+        else:
+            person_id = int(conn.execute(
+                """INSERT INTO person(company_id,first_name,last_name,title,status,stop_reason,
+                   created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)""",
+                (company_id, contact.first_name, contact.last_name, contact.title,
+                 result.status, result.stop_reason, now, now),
+            ).lastrowid)
+        result.person_id = person_id
+        for kind, value, professional in result.evidence:
+            conn.execute(
+                """INSERT INTO evidence(person_id,company_id,kind,value,professional,created_at)
+                   VALUES(?,?,?,?,?,?)""",
+                (person_id, company_id, kind, value, int(professional), now),
+            )
+        for item in result.candidates:
+            conn.execute(
+                """INSERT INTO email_candidate(person_id,email,pattern,source,evidence_tier,
+                   found_on_web,catch_all_domain,verification_method,verification_verdict,
+                   confidence,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(person_id,email) DO UPDATE SET pattern=excluded.pattern,
+                   source=excluded.source,evidence_tier=excluded.evidence_tier,
+                   found_on_web=excluded.found_on_web,catch_all_domain=excluded.catch_all_domain,
+                   verification_method=excluded.verification_method,
+                   verification_verdict=excluded.verification_verdict,
+                   confidence=excluded.confidence,notes=excluded.notes,created_at=excluded.created_at""",
+                (person_id, item.email, item.pattern, item.source, item.evidence_tier,
+                 int(item.found_on_web), int(item.catch_all_domain is True),
+                 item.verification_method.value, item.verification_verdict.value,
+                 item.confidence, item.notes, now),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _established_pattern(domain: str) -> str | None:
+    conn = connect(settings.db_path)
+    try:
+        init_schema(conn)
+        row = conn.execute(
+            "SELECT pattern FROM domain_pattern WHERE domain=? COLLATE NOCASE",
+            (domain.strip().lower().rstrip("."),),
+        ).fetchone()
+        return row["pattern"] if row and is_established(conn, domain) else None
+    finally:
+        conn.close()
 
 
 async def _verify_csv(csv_path: Path) -> None:
