@@ -13,7 +13,7 @@ class RawResponse:
 
 
 def build_argv(executable: str, url: str, timeout: int, *, stealth: bool) -> list[str]:
-    argv = [executable, "--quiet", "fetch", url, "--dump", "html", "--timeout", str(timeout)]
+    argv = [executable, "fetch", url, "--dump", "html", "--timeout", str(timeout), "--quiet"]
     if stealth:
         argv.append("--stealth")
     return argv

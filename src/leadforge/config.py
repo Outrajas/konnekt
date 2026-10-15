@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -46,7 +46,10 @@ class Settings(BaseSettings):
     walk_stale_hops: int = 2
     walk_wall_clock_seconds: int = 600
 
-    obscura_path: Path | None = None
+    obscura_path: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OBSCURA_PATH", "LEADFORGE_OBSCURA_PATH"),
+    )
     obscura_stealth: bool = True
     obscura_timeout_seconds: int = 30
 
