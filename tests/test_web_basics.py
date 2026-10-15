@@ -20,8 +20,10 @@ from leadforge.web.tiers.obscura import build_argv
 
 def test_policy_exact_subdomain_fallback_and_bad_file(tmp_path) -> None:
     path = tmp_path / "policy.toml"
-    path.write_text('[default]\nenabled=true\nmax_tier=2\n["linkedin.com"]\n'
-                    'enabled=true\nmax_tier=1\n', encoding="utf-8")
+    path.write_text(
+        '[default]\nenabled=true\nmax_tier=2\n["linkedin.com"]\nenabled=true\nmax_tier=1\n',
+        encoding="utf-8",
+    )
     policy = DomainPolicy.load(path)
     assert policy.resolve("linkedin.com").max_tier == 1
     assert policy.resolve("jobs.linkedin.com").max_tier == 1
@@ -62,16 +64,21 @@ def test_cache_normalization_and_hit(tmp_path) -> None:
     conn = connect(db_path)
     init_schema(conn)
     conn.close()
-    settings = Settings(
-        _env_file=None, db_path=db_path, cache_dir=tmp_path / "cache"
-    )
+    settings = Settings(_env_file=None, db_path=db_path, cache_dir=tmp_path / "cache")
     cache = PageCache(settings)
     assert normalize_url("HTTPS://Example.com/a?utm_source=x&b=2#frag") == (
         "https://example.com/a?b=2"
     )
     result = FetchResult(
-        "https://example.com/a?b=2", "https://example.com/a?b=2", 200,
-        "<p>public</p>", "", 1, False, False, "2026-10-15T00:00:00+00:00",
+        "https://example.com/a?b=2",
+        "https://example.com/a?b=2",
+        200,
+        "<p>public</p>",
+        "",
+        1,
+        False,
+        False,
+        "2026-10-15T00:00:00+00:00",
     )
     assert cache.get(result.url) is None
     cache.put(result)
@@ -87,8 +94,10 @@ async def test_budget_cap_pause_and_day_reset(tmp_path) -> None:
     init_schema(conn)
     conn.close()
     now = [datetime(2026, 10, 15, tzinfo=UTC)]
+
     async def sleep(_seconds: float) -> None:
         now[0] += timedelta(seconds=_seconds)
+
     budget = Budget(str(db_path), clock=lambda: now[0], sleep=sleep, uniform=lambda _a, _b: 1)
     rule = DomainRule(min_delay_s=1, max_delay_s=1, daily_cap=1)
     await budget.acquire("example.test", rule)
@@ -131,6 +140,7 @@ async def test_budget_spacing_and_independent_host_locks(tmp_path) -> None:
 
 def test_default_policy_never_allows_tier_three() -> None:
     from leadforge.config import settings
+
     policy = DomainPolicy.load(settings.domain_policy_path)
     assert policy.default.max_tier < 3
     assert not policy.default.allow_challenge_solving
@@ -145,9 +155,16 @@ def test_default_policy_never_allows_tier_three() -> None:
 def test_obscura_argv_is_a_list_and_tier_three_stays_disabled() -> None:
     from leadforge.web.errors import TierUnavailable
     from leadforge.web.tiers.stealth import require_allowed
+
     assert build_argv("obscura.exe", "https://example.test", 20, stealth=False) == [
-        "obscura.exe", "fetch", "https://example.test", "--dump", "html",
-        "--timeout", "20", "--quiet",
+        "obscura.exe",
+        "fetch",
+        "https://example.test",
+        "--dump",
+        "html",
+        "--timeout",
+        "20",
+        "--quiet",
     ]
     assert build_argv("obscura.exe", "https://example.test", 20, stealth=True)[-1] == "--stealth"
     with pytest.raises(TierUnavailable, match="disabled by domain policy"):
@@ -173,9 +190,7 @@ def test_terminal_safe_text_replaces_unrepresentable_characters() -> None:
 )
 async def test_robots_status_and_path(status, body, path, expected) -> None:
     with respx.mock(assert_all_called=True) as mock:
-        mock.get("https://example.test/robots.txt").mock(
-            return_value=Response(status, text=body)
-        )
+        mock.get("https://example.test/robots.txt").mock(return_value=Response(status, text=body))
         checker = RobotsChecker("LeadForgeTestBot")
         assert await checker.allowed(f"https://example.test{path}") is expected
 
@@ -201,16 +216,20 @@ async def test_router_challenge_pauses_without_escalation(tmp_path, monkeypatch)
 
     policy_path = tmp_path / "policy.toml"
     policy_path.write_text(
-        '[default]\nenabled=true\nmin_delay_s=0\nmax_delay_s=0\ndaily_cap=10\n'
-        'max_tier=2\nobey_robots=false\n', encoding="utf-8"
+        "[default]\nenabled=true\nmin_delay_s=0\nmax_delay_s=0\ndaily_cap=10\n"
+        "max_tier=2\nobey_robots=false\n",
+        encoding="utf-8",
     )
     db_path = tmp_path / "router.db"
     conn = connect(db_path)
     init_schema(conn)
     conn.close()
     settings = Settings(
-        _env_file=None, db_path=db_path, cache_dir=tmp_path / "cache",
-        domain_policy_path=policy_path, denylist_hosts_path=tmp_path / "denylist.txt",
+        _env_file=None,
+        db_path=db_path,
+        cache_dir=tmp_path / "cache",
+        domain_policy_path=policy_path,
+        denylist_hosts_path=tmp_path / "denylist.txt",
         pause_hours_on_block=48,
     )
     seen_tiers: list[int] = []
@@ -239,8 +258,11 @@ async def test_disabled_host_is_refused_before_any_request(tmp_path, monkeypatch
         encoding="utf-8",
     )
     settings = Settings(
-        _env_file=None, db_path=tmp_path / "refuse.db", cache_dir=tmp_path / "cache",
-        domain_policy_path=policy_path, denylist_hosts_path=tmp_path / "denylist.txt",
+        _env_file=None,
+        db_path=tmp_path / "refuse.db",
+        cache_dir=tmp_path / "cache",
+        domain_policy_path=policy_path,
+        denylist_hosts_path=tmp_path / "denylist.txt",
     )
 
     async def unexpected(url, settings):
@@ -249,6 +271,30 @@ async def test_disabled_host_is_refused_before_any_request(tmp_path, monkeypatch
     monkeypatch.setattr(fetcher_module.http, "fetch", unexpected)
     with pytest.raises(DomainPaused, match="disabled by policy"):
         await fetcher_module.Fetcher(settings).fetch("https://blocked.test/")
+
+
+@pytest.mark.asyncio
+async def test_router_selects_httpx_transport_for_json_api_hosts(monkeypatch) -> None:
+    from leadforge.web import fetcher as fetcher_module
+    from leadforge.web.policy import DomainRule
+    from leadforge.web.tiers.http import RawResponse
+
+    calls = []
+
+    async def fake_http(url, settings, **kwargs):
+        calls.append((url, kwargs.get("use_httpx")))
+        return RawResponse(url, 200, {}, '{"jobs": []}')
+
+    monkeypatch.setattr(fetcher_module.http, "fetch", fake_http)
+    router = object.__new__(fetcher_module.Fetcher)
+    router.settings = Settings(_env_file=None)
+
+    result = await router._fetch_tier(
+        1, "https://api.ashbyhq.com/posting-api/job-board/demo", DomainRule()
+    )
+
+    assert result.body == '{"jobs": []}'
+    assert calls == [("https://api.ashbyhq.com/posting-api/job-board/demo", True)]
 
 
 @pytest.mark.asyncio
@@ -271,11 +317,12 @@ async def test_platform_fetch_purpose_guards(
 
     policy_path = tmp_path / "policy.toml"
     policy_path.write_text(
-        '[default]\nenabled=true\nmin_delay_s=0\nmax_delay_s=0\nmax_tier=2\n'
-        'obey_robots=false\n' + ''.join(
+        "[default]\nenabled=true\nmin_delay_s=0\nmax_delay_s=0\nmax_tier=2\n"
+        "obey_robots=false\n"
+        + "".join(
             f'["{domain}"]\nenabled=true\nmin_delay_s=0\nmax_delay_s=0\n'
-            'daily_cap=10\nmax_tier=1\nobey_robots=false\n'
-            'allow_challenge_solving=false\n'
+            "daily_cap=10\nmax_tier=1\nobey_robots=false\n"
+            "allow_challenge_solving=false\n"
             for domain in ("linkedin.com", "indeed.com", "glassdoor.com")
         ),
         encoding="utf-8",
@@ -285,8 +332,11 @@ async def test_platform_fetch_purpose_guards(
     init_schema(conn)
     conn.close()
     settings = Settings(
-        _env_file=None, db_path=db_path, cache_dir=tmp_path / f"cache-{platform}",
-        domain_policy_path=policy_path, denylist_hosts_path=tmp_path / "none.txt",
+        _env_file=None,
+        db_path=db_path,
+        cache_dir=tmp_path / f"cache-{platform}",
+        domain_policy_path=policy_path,
+        denylist_hosts_path=tmp_path / "none.txt",
     )
     calls: list[str] = []
 
@@ -301,8 +351,6 @@ async def test_platform_fetch_purpose_guards(
             await router.fetch(f"https://www.{platform}/", purpose=purpose, use_cache=False)
         assert not calls
     else:
-        result = await router.fetch(
-            f"https://www.{platform}/", purpose=purpose, use_cache=False
-        )
+        result = await router.fetch(f"https://www.{platform}/", purpose=purpose, use_cache=False)
         assert result.tier == 1
         assert calls

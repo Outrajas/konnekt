@@ -55,3 +55,28 @@ class EnrichmentResult(BaseModel):
     best_email: EmailCandidate | None = None
     all_candidates: list[EmailCandidate] = Field(default_factory=list)
     enriched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class Job(BaseModel):
+    company: str
+    domain: str
+    title: str
+    url: str
+    location: str | None = None
+    employment_type: str | None = None
+    description: str = ""
+    source: str
+    match_score: float = 0.0
+    match_reasons: list[str] = Field(default_factory=list)
+    invites_email: bool = False
+    fetch_tier: int | None = None
+    js_rendered: bool = False
+
+
+class OperatorProfile(BaseModel):
+    skills: list[str] = Field(default_factory=list)
+    adjacent_skills: list[str] = Field(default_factory=list)
+    target_titles: list[str] = Field(default_factory=list)
+    adjacent_titles: list[str] = Field(default_factory=list)
+    seniority: list[str] = Field(default_factory=lambda: ["internship", "entry"])
+    location_preferences: list[str] = Field(default_factory=lambda: ["India", "remote"])

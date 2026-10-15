@@ -24,17 +24,21 @@ def tier1_backend() -> str:
     return "scrapling"
 
 
-async def fetch(url: str, settings: Settings | None = None) -> RawResponse:
+async def fetch(
+    url: str, settings: Settings | None = None, *, use_httpx: bool = False
+) -> RawResponse:
     settings = settings or Settings()
     headers = {
         "User-Agent": settings.user_agent,
         "Accept-Language": "en-US,en;q=0.9",
     }
     timeout = httpx.Timeout(settings.http_timeout_seconds)
-    try:
-        from scrapling.fetchers import Fetcher
-    except ImportError:
-        Fetcher = None
+    Fetcher = None
+    if not use_httpx:
+        try:
+            from scrapling.fetchers import Fetcher
+        except ImportError:
+            pass
     if Fetcher is not None:
         response = await asyncio.to_thread(
             Fetcher.get,
@@ -51,11 +55,11 @@ async def fetch(url: str, settings: Settings | None = None) -> RawResponse:
         body = str(response.text)
         if len(body.encode("utf-8", errors="replace")) > MAX_RESPONSE_BYTES:
             raise ValueError("Response exceeded 3 MB limit")
-        return RawResponse(
-            str(response.url), int(response.status), dict(response.headers), body
-        )
+        return RawResponse(str(response.url), int(response.status), dict(response.headers), body)
     async with httpx.AsyncClient(
-        timeout=timeout, follow_redirects=True, max_redirects=5,
+        timeout=timeout,
+        follow_redirects=True,
+        max_redirects=5,
         headers=headers,
     ) as client:
         async with client.stream("GET", url) as response:

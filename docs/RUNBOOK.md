@@ -54,3 +54,12 @@ Before running `leadforge verify` or `leadforge enrich`, set
 `LEADFORGE_SMTP_MAIL_FROM` to a valid address at a domain the operator controls.
 The verifier uses this value only for the SMTP `MAIL FROM` command; it never
 sends message data. An empty value or the sample placeholder is refused.
+
+## Discovery inputs
+
+Place the operator resume in `data/input`, run `leadforge profile ingest <resume>`
+and review `data/profile.json`. Add only operator-approved companies to
+`data/input/companies.csv` (`name,domain`). Preview the routed requests with
+`leadforge discover --companies data/input/companies.csv --dry-run`; a live run
+is refused until the editable profile exists. Use `--include-hn` to add the
+Hacker News hiring thread source.

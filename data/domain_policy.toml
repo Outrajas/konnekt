@@ -51,9 +51,37 @@ enabled = true
 min_delay_s = 1.0
 max_delay_s = 3.0
 daily_cap = 200
-max_tier = 0
+max_tier = 1
+
+["boards-api.greenhouse.io"]
+enabled = true
+min_delay_s = 2.0
+max_delay_s = 4.0
+daily_cap = 20
+max_tier = 1
+
+["api.lever.co"]
+enabled = true
+min_delay_s = 2.0
+max_delay_s = 4.0
+daily_cap = 20
+max_tier = 1
+
+["api.ashbyhq.com"]
+enabled = true
+min_delay_s = 2.0
+max_delay_s = 4.0
+daily_cap = 20
+max_tier = 1
 
 ["news.ycombinator.com"]
+enabled = true
+min_delay_s = 2.0
+max_delay_s = 5.0
+daily_cap = 100
+max_tier = 1
+
+["hacker-news.firebaseio.com"]
 enabled = true
 min_delay_s = 2.0
 max_delay_s = 5.0

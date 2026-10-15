@@ -42,8 +42,13 @@ class Fetcher:
         self.robots.cache_put = self.cache.put
 
     async def fetch(
-        self, url: str, *, min_tier: int = 1, max_tier: int | None = None,
-        use_cache: bool = True, purpose: str = "",
+        self,
+        url: str,
+        *,
+        min_tier: int = 1,
+        max_tier: int | None = None,
+        use_cache: bool = True,
+        purpose: str = "",
     ) -> FetchResult:
         normalized = normalize_url(url)
         parts = urlsplit(normalized)
@@ -56,15 +61,12 @@ class Fetcher:
             raise DomainPaused(f"{host} disabled by policy")
         budget_host = self.policy.budget_key(host)
         if budget_host == "linkedin.com" and purpose != "search-snippet-miss":
-            raise DomainPaused(
-                "LinkedIn page fetch requires purpose='search-snippet-miss'"
-            )
+            raise DomainPaused("LinkedIn page fetch requires purpose='search-snippet-miss'")
         if budget_host in {"indeed.com", "glassdoor.com"} and purpose not in {
-            "job", "hiring-signal",
+            "job",
+            "hiring-signal",
         }:
-            raise DomainPaused(
-                f"{budget_host} fetches are limited to job and hiring signals"
-            )
+            raise DomainPaused(f"{budget_host} fetches are limited to job and hiring signals")
         cached = self.cache.get(normalized) if use_cache else None
         if cached is not None:
             self._log_fetch(normalized, cached.tier, cached.status, "ok", True, purpose)
@@ -99,8 +101,15 @@ class Fetcher:
             self._log_fetch(normalized, tier, response.status, classification, False, purpose)
             if classification == "ok":
                 result = FetchResult(
-                    normalized, response.url, response.status, response.body, "", tier, False,
-                    False, clock.utcnow_iso(),
+                    normalized,
+                    response.url,
+                    response.status,
+                    response.body,
+                    "",
+                    tier,
+                    False,
+                    False,
+                    clock.utcnow_iso(),
                 )
                 self.cache.put(result)
                 return result
@@ -111,14 +120,26 @@ class Fetcher:
                 await self.budget.pause(
                     self.policy.budget_key(host), self.settings.pause_hours_on_block, classification
                 )
-                raise Blocked(f"{host} returned {classification}; paused for "
-                              f"{self.settings.pause_hours_on_block} hours")
+                raise Blocked(
+                    f"{host} returned {classification}; paused for "
+                    f"{self.settings.pause_hours_on_block} hours"
+                )
             if classification == "thin":
                 raise FetchFailed(f"Thin response from {host}; no permitted rendering tier")
             raise FetchFailed(f"Unexpected response from {host}: {response.status}")
 
     async def _fetch_tier(self, tier: int, url: str, rule: DomainRule) -> http.RawResponse:
         if tier == 1:
+            host = urlsplit(url).hostname or ""
+            api_hosts = {
+                "boards-api.greenhouse.io",
+                "api.lever.co",
+                "api.ashbyhq.com",
+                "hacker-news.firebaseio.com",
+                "hn.algolia.com",
+            }
+            if host in api_hosts:
+                return await http.fetch(url, self.settings, use_httpx=True)
             return await http.fetch(url, self.settings)
         if tier == 2:
             return await obscura.fetch(
@@ -132,8 +153,13 @@ class Fetcher:
         raise TierUnavailable(f"Unsupported fetch tier: {tier}")
 
     def _log_fetch(
-        self, url: str, tier: int, status: int | None, classification: str,
-        from_cache: bool, purpose: str,
+        self,
+        url: str,
+        tier: int,
+        status: int | None,
+        classification: str,
+        from_cache: bool,
+        purpose: str,
     ) -> None:
         parts = urlsplit(url)
         safe_url = f"{parts.scheme}://{parts.netloc}{parts.path}"
@@ -141,9 +167,13 @@ class Fetcher:
         try:
             conn.execute(
                 "INSERT INTO run_log(ts,stage,level,message) VALUES(?,?,?,?)",
-                (clock.utcnow_iso(), "fetch", "info",
-                 f"host={parts.hostname} tier={tier} status={status} class={classification} "
-                 f"cache={from_cache} purpose={purpose[:80]} url={safe_url}"),
+                (
+                    clock.utcnow_iso(),
+                    "fetch",
+                    "info",
+                    f"host={parts.hostname} tier={tier} status={status} class={classification} "
+                    f"cache={from_cache} purpose={purpose[:80]} url={safe_url}",
+                ),
             )
             conn.commit()
         finally:
@@ -157,4 +187,5 @@ async def fetch(url: str, **kwargs) -> FetchResult:
 async def fetch_text(url: str, **kwargs) -> str:
     result = await fetch(url, **kwargs)
     from bs4 import BeautifulSoup
+
     return " ".join(BeautifulSoup(result.html, "lxml").get_text(" ").split())
