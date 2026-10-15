@@ -17,3 +17,8 @@
 - Tier 2 is implemented as a subprocess adapter but remains unavailable until Obscura is installed and its CLI flags are verified in Phase 7. Tier 3 remains unavailable in this baseline.
 - Tier 3 intentionally stays off; revisit only if the Phase 16 benchmark shows a concrete need.
 - The live Tier 1 acceptance fetch and persistent-cache repeat succeeded against `example.com` after the sandbox network restriction was lifted for those checks. Doctor's independent port 25 probe remains blocked by DNS/network egress in this environment.
+
+## Extraction helpers
+
+- `classify_host` accepts an optional `company_domain`, because a URL alone cannot identify whether an otherwise generic host belongs to the company being evaluated. Conference hosts and configured personal-site domains live in `data/host_kinds.toml`.
+- Email extraction drops reserved example/test domains, including `.example`, even when an address is syntactically valid; fixtures therefore test their exclusion instead of treating them as deliverable addresses.
