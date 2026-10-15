@@ -28,7 +28,7 @@ def conn(tmp_path):
 
 def test_schema_is_idempotent_and_foreign_keys_are_enabled(conn) -> None:
     init_schema(conn)
-    assert schema_version(conn) == 1
+    assert schema_version(conn) == 2
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
 

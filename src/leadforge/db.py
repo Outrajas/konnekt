@@ -103,7 +103,13 @@ MIGRATIONS = [
         level TEXT NOT NULL,
         message TEXT NOT NULL
     );
+    """,
     """
+    CREATE TABLE IF NOT EXISTS llm_usage (
+        day TEXT PRIMARY KEY,
+        count INTEGER NOT NULL DEFAULT 0
+    );
+    """,
 ]
 
 

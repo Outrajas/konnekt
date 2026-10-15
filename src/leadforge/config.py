@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     llm_model: str | None = None
     llm_max_input_chars: int = 12_000
     llm_timeout_seconds: float = 60.0
+    llm_requests_per_minute: int = 10
+    llm_daily_cap: int = 100
 
     retention_days: int = 30
 

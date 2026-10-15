@@ -11,6 +11,9 @@ from rich.console import Console
 from leadforge import __version__
 from leadforge.config import settings
 from leadforge.db import connect, init_schema, schema_version
+from leadforge.llm import LLMNotConfigured, LLMOutputError, chat_json
+from leadforge.llm.prompts import PROMPT_VERSION
+from leadforge.llm.schemas import PingResponse
 from leadforge.models import Contact, EmailCandidate
 from leadforge.tools.smtp_verify import Port25Status, check_port25_status, verify_candidates
 from leadforge.web.denylist import load_denylist
@@ -138,6 +141,28 @@ def fetch(
         from bs4 import BeautifulSoup
         cleaned = " ".join(BeautifulSoup(result.html, "lxml").get_text(" ").split())
         console.print(cleaned[:500])
+
+
+@app.command("llm-ping")
+def llm_ping() -> None:
+    """Check an explicitly configured OpenAI-compatible LLM endpoint."""
+    try:
+        result = asyncio.run(
+            chat_json(
+                "Return a JSON object with a boolean ok value.",
+                'Reply with the JSON {"ok": true}',
+                PingResponse,
+                settings=settings,
+                prompt_version=PROMPT_VERSION,
+            )
+        )
+    except LLMNotConfigured:
+        console.print("LLM not configured")
+        return
+    except LLMOutputError as exc:
+        console.print(f"LLM ping failed: {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print("LLM configured and responding" if result.ok else "LLM returned ok=false")
 
 
 @app.command()
