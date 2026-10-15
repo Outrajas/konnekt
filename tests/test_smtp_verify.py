@@ -1,6 +1,7 @@
 import asyncio
 import socket
 
+import dns.exception
 import pytest
 from aiosmtpd.controller import Controller
 
@@ -11,11 +12,11 @@ from leadforge.models import (
     VerificationMethod,
     VerificationVerdict,
 )
-from leadforge.tools import smtp_verify
 from leadforge.tools.smtp_verify import (
+    Port25Status,
     Probe,
     Unreachable,
-    check_port25_reachable,
+    check_port25_status,
     classify,
     is_valid_syntax,
     verify_candidates,
@@ -222,7 +223,7 @@ async def test_missing_mail_from_is_a_clear_configuration_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_port_25_check_uses_injected_resolver_and_connector(monkeypatch) -> None:
+async def test_port_25_check_reports_reachable_with_fake_resolver_and_socket() -> None:
     calls: list[tuple[str, int]] = []
 
     class Writer:
@@ -240,9 +241,42 @@ async def test_port_25_check_uses_injected_resolver_and_connector(monkeypatch) -
         calls.append((host, port))
         return object(), Writer()
 
-    monkeypatch.setattr(smtp_verify.asyncio, "open_connection", open_connection)
-    assert await check_port25_reachable(mx_resolver=mx)
+    assert await check_port25_status(mx_resolver=mx, socket_connector=open_connection) is (
+        Port25Status.REACHABLE
+    )
     assert calls == [("mx.example.test", 25)]
+
+
+@pytest.mark.asyncio
+async def test_port_25_check_distinguishes_dns_failure_from_tcp_timeout() -> None:
+    async def dns_failure(domain: str) -> list[str]:
+        assert domain == "gmail.com"
+        raise dns.exception.Timeout("DNS timed out")
+
+    async def mx(domain: str) -> list[str]:
+        return ["mx.example.test"]
+
+    async def timeout_socket(host: str, port: int):
+        assert (host, port) == ("mx.example.test", 25)
+        raise TimeoutError("TCP connect timed out")
+
+    assert await check_port25_status(mx_resolver=dns_failure) is Port25Status.DNS_FAILED
+    assert await check_port25_status(
+        mx_resolver=mx, socket_connector=timeout_socket
+    ) is Port25Status.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_port_25_check_reports_dns_failure_when_no_mx_records_exist() -> None:
+    async def no_mx(domain: str) -> list[str]:
+        return []
+
+    async def unexpected_socket(host: str, port: int):
+        raise AssertionError("no socket call without MX records")
+
+    assert await check_port25_status(
+        mx_resolver=no_mx, socket_connector=unexpected_socket
+    ) is Port25Status.DNS_FAILED
 
 
 class SmtpHandler:
