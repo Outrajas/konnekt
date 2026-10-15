@@ -22,3 +22,19 @@ def test_verify_refuses_empty_mail_from_before_opening_csv(monkeypatch) -> None:
 
     assert result.exit_code == 2
     assert "SMTP checks refused" in result.output
+
+
+def test_discover_dry_run_only_prints_plan(tmp_path, monkeypatch) -> None:
+    companies = tmp_path / "companies.csv"
+    companies.write_text("name,domain\nAcme,acme.example\n", encoding="utf-8")
+
+    class NoNetwork:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("dry-run must not create a fetcher")
+
+    monkeypatch.setattr(cli, "Fetcher", NoNetwork)
+    result = CliRunner().invoke(cli.app, ["discover", "--companies", str(companies), "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "no requests made" in result.output
+    assert "acme.example" in result.output

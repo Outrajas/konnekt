@@ -17,8 +17,17 @@ from leadforge.db import connect, init_schema, schema_version
 from leadforge.llm import LLMNotConfigured, LLMOutputError, chat_json
 from leadforge.llm.prompts import PROMPT_VERSION, SYSTEM_PROMPT
 from leadforge.llm.schemas import PingResponse
-from leadforge.models import Contact, EmailCandidate
+from leadforge.models import Contact, EmailCandidate, OperatorProfile
+from leadforge.stages.discovery import (
+    discover_company_jobs,
+    discover_hn_signals,
+    persist_invite_signals,
+    plan_discovery,
+    read_companies,
+    save_jobs,
+)
 from leadforge.stages.pattern_learn import is_established
+from leadforge.stages.profile import extract_profile, read_resume, save_profile
 from leadforge.stages.replay import ReplayFetcher
 from leadforge.stages.walk import WalkBudget, WalkResult, seed_urls, walk_person
 from leadforge.tools.smtp_verify import (
@@ -38,6 +47,8 @@ app = typer.Typer(
     help="Self-hosted email enrichment pipeline.",
     no_args_is_help=True,
 )
+profile_app = typer.Typer(help="Inspect and edit operator profile inputs.")
+app.add_typer(profile_app, name="profile")
 console = Console()
 
 
@@ -162,8 +173,19 @@ def fetch(
     tier: int = typer.Option(1, min=1, max=3),
     no_cache: bool = typer.Option(False, "--no-cache"),
     text: bool = typer.Option(False, "--text"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
 ) -> None:
-    """Fetch one URL through the policy, robots, budget, and cache router."""
+    """Fetch one URL through the router; --dry-run never makes a request."""
+    if dry_run:
+        from urllib.parse import urlsplit
+
+        host = urlsplit(url).hostname or "(invalid URL)"
+        rule = DomainPolicy.load(settings.domain_policy_path, settings).resolve(host)
+        console.print(
+            f"Would fetch {url} through policy: enabled={rule.enabled}, "
+            f"daily_cap={rule.daily_cap}, max_tier={rule.max_tier}; no request made"
+        )
+        return
     try:
         result = asyncio.run(Fetcher(settings).fetch(url, min_tier=tier, use_cache=not no_cache))
     except FetchError as exc:
@@ -181,6 +203,61 @@ def fetch(
 
         cleaned = " ".join(BeautifulSoup(result.html, "lxml").get_text(" ").split())
         console.print(_terminal_safe_text(cleaned[:500]))
+
+
+@profile_app.command("ingest")
+def profile_ingest(resume: Path) -> None:
+    """Extract a deterministic, editable profile from a resume document."""
+    if not resume.is_file():
+        console.print(f"[red]Resume not found:[/] {resume}")
+        raise typer.Exit(code=2)
+    profile = extract_profile(read_resume(resume))
+    output_path = settings.data_dir / "profile.json"
+    save_profile(profile, output_path)
+    console.print(output_path.read_text(encoding="utf-8"))
+
+
+@app.command("discover")
+def discover(
+    companies: Annotated[Path, typer.Option(..., "--companies", exists=True, dir_okay=False)],
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    include_hn: bool = typer.Option(False, "--include-hn"),
+) -> None:
+    """Find public jobs for operator-supplied companies; dry-run makes no requests."""
+    company_rows = read_companies(companies)
+    if dry_run:
+        console.print("Discovery plan (no requests made):")
+        for item in plan_discovery(company_rows, settings):
+            console.print(f"  {item}")
+        if include_hn:
+            rule = DomainPolicy.load(settings.domain_policy_path, settings).resolve(
+                "hacker-news.firebaseio.com"
+            )
+            console.print(
+                f"  https://hacker-news.firebaseio.com/v0/user/whoishiring.json "
+                f"cap={rule.daily_cap} enabled={rule.enabled}"
+            )
+        return
+    profile_path = settings.data_dir / "profile.json"
+    if not profile_path.is_file():
+        console.print("[red]Discovery refused:[/] ingest the operator resume first.")
+        raise typer.Exit(code=2)
+    profile = OperatorProfile.model_validate_json(profile_path.read_text(encoding="utf-8"))
+    fetcher = Fetcher(settings)
+
+    async def run_discovery():
+        collected = []
+        for company in company_rows:
+            collected.extend(await discover_company_jobs(company, profile, fetcher=fetcher))
+        if include_hn:
+            collected.extend(await discover_hn_signals(company_rows, profile))
+        return collected
+
+    jobs = asyncio.run(run_discovery())
+    persist_invite_signals(jobs, settings)
+    output_path = settings.output_dir / "discovered_jobs.csv"
+    save_jobs(jobs, output_path)
+    console.print(f"Discovered {len(jobs)} jobs → {output_path}")
 
 
 def _terminal_safe_text(value: str, encoding: str | None = None) -> str:
@@ -234,6 +311,7 @@ def walk_command(
     last: str = typer.Option(..., "--last"),
     title: str = typer.Option("", "--title"),
     replay: Annotated[Path | None, typer.Option("--replay", exists=True, file_okay=False)] = None,
+    dry_run: bool = typer.Option(False, "--dry-run"),
 ) -> None:
     """Run a bounded person walk; --replay serves fixture pages without network access."""
     contact = Contact(
@@ -258,6 +336,12 @@ def walk_command(
         verify_fn = offline_verify
         starts = replay_fetcher.seeds or seed_urls(company_domain)
     else:
+        if dry_run:
+            console.print(
+                f"Would walk {company_domain} from {', '.join(seed_urls(company_domain))}; "
+                "no requests made"
+            )
+            return
         fetcher = Fetcher(settings)
 
         async def live_llm(**kwargs):
