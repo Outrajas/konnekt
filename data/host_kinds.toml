@@ -1,0 +1,9 @@
+[host_kinds]
+talk_domains = [
+  "aclanthology.org",
+  "conf.researchr.org",
+  "dl.acm.org",
+  "neurips.cc",
+  "usenix.org",
+]
+personal_site_domains = []
