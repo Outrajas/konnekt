@@ -6,6 +6,7 @@ from rich.console import Console
 
 from leadforge import __version__
 from leadforge.config import settings
+from leadforge.db import connect, init_schema, schema_version
 
 app = typer.Typer(
     name="leadforge",
@@ -42,6 +43,19 @@ def doctor() -> None:
             console.print(f"  [green]+[/] {tool}: {path}")
         else:
             console.print(f"  [yellow]-[/] {tool}: not found -- {hint}")
+
+
+@app.command("init-db")
+def init_db() -> None:
+    """Create the local SQLite database and initialize its schema."""
+    conn = connect(settings.db_path)
+    try:
+        init_schema(conn)
+        console.print(
+            f"Database ready: {settings.db_path.resolve()} (schema v{schema_version(conn)})"
+        )
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
