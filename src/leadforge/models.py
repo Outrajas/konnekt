@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -39,6 +40,7 @@ class EmailCandidate(BaseModel):
     email: str
     contact: Contact
     pattern: str | None = None
+    evidence_tier: Literal["A", "B", "C"] = "C"
     source: str
     found_on_web: bool = False
     catch_all_domain: bool | None = None

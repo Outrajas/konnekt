@@ -110,6 +110,15 @@ MIGRATIONS = [
         count INTEGER NOT NULL DEFAULT 0
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS domain_pattern_sample (
+        domain TEXT NOT NULL,
+        pattern TEXT NOT NULL,
+        email TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(domain, email)
+    );
+    """,
 ]
 
 

@@ -18,6 +18,11 @@
 - Tier 3 intentionally stays off; revisit only if the Phase 16 benchmark shows a concrete need.
 - The live Tier 1 acceptance fetch and persistent-cache repeat succeeded against `example.com` after the sandbox network restriction was lifted for those checks. Doctor's independent port 25 probe remains blocked by DNS/network egress in this environment.
 
+## Pattern evidence and scoring
+
+- `EmailCandidate.evidence_tier` records the Phase 11 A/B/C evidence class as an additive field alongside the original spec model; see `SPEC_DELTA.md` §5 entry. Confidence weights remain exactly those in spec §6.
+- Domain pattern learning stores unique Tier-A email samples by domain and address, then keeps the majority pattern in `domain_pattern`; ties preserve the prior winner or use stable pattern ordering. A pattern is established only with two unique samples agreeing on that pattern.
+
 ## Extraction helpers
 
 - `classify_host` accepts an optional `company_domain`, because a URL alone cannot identify whether an otherwise generic host belongs to the company being evaluated. Conference hosts and configured personal-site domains live in `data/host_kinds.toml`.
