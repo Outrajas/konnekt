@@ -21,7 +21,12 @@ from leadforge.models import Contact, EmailCandidate
 from leadforge.stages.pattern_learn import is_established
 from leadforge.stages.replay import ReplayFetcher
 from leadforge.stages.walk import WalkBudget, WalkResult, seed_urls, walk_person
-from leadforge.tools.smtp_verify import Port25Status, check_port25_status, verify_candidates
+from leadforge.tools.smtp_verify import (
+    Port25Status,
+    check_port25_status,
+    smtp_mail_from_problem,
+    verify_candidates,
+)
 from leadforge.web.denylist import load_denylist
 from leadforge.web.errors import FetchError
 from leadforge.web.fetcher import Fetcher
@@ -47,12 +52,13 @@ def doctor() -> None:
     """Check Python, dependencies, and external tool availability."""
     console.print(f"[bold]Python:[/] {sys.version.split()[0]}")
     console.print(f"[bold]Data dir:[/] {settings.data_dir.resolve()}")
-    console.print(f"[bold]SMTP from:[/] {settings.smtp_from_address}")
+    console.print(f"[bold]SMTP MAIL FROM:[/] {settings.smtp_mail_from or '(empty)'}")
+    mail_from_problem = smtp_mail_from_problem(settings.smtp_mail_from)
+    if mail_from_problem:
+        console.print(f"[bold yellow]Warning:[/] {mail_from_problem}")
     dns_nameservers = settings.dns_nameservers or dns.resolver.get_default_resolver().nameservers
     dns_source = "configured" if settings.dns_nameservers else "system"
-    console.print(
-        f"[bold]DNS resolver:[/] {', '.join(map(str, dns_nameservers))} ({dns_source})"
-    )
+    console.print(f"[bold]DNS resolver:[/] {', '.join(map(str, dns_nameservers))} ({dns_source})")
     console.print(f"[bold]Min confidence:[/] {settings.min_confidence_to_emit}")
     console.print(f"[bold]LLM API key:[/] {'set' if settings.llm_api_key else 'not set'}")
     policy = DomainPolicy.load(settings.domain_policy_path, settings)
@@ -71,6 +77,7 @@ def doctor() -> None:
         console.print("[bold]Tier 2:[/] disabled (OBSCURA_PATH not set)")
     try:
         from scrapling.fetchers import Fetcher as _ScraplingFetcher  # noqa: F401
+
         scrapling_available = True
     except ImportError:
         scrapling_available = False
@@ -158,13 +165,12 @@ def fetch(
 ) -> None:
     """Fetch one URL through the policy, robots, budget, and cache router."""
     try:
-        result = asyncio.run(
-            Fetcher(settings).fetch(url, min_tier=tier, use_cache=not no_cache)
-        )
+        result = asyncio.run(Fetcher(settings).fetch(url, min_tier=tier, use_cache=not no_cache))
     except FetchError as exc:
         console.print(f"[red]Fetch failed:[/] {exc}")
         raise typer.Exit(code=1) from exc
     from leadforge.web.detect import classify_response
+
     classification = classify_response(result.status or 0, {}, result.html)
     console.print(
         f"status={result.status} tier={result.tier} classification={classification} "
@@ -172,6 +178,7 @@ def fetch(
     )
     if text:
         from bs4 import BeautifulSoup
+
         cleaned = " ".join(BeautifulSoup(result.html, "lxml").get_text(" ").split())
         console.print(_terminal_safe_text(cleaned[:500]))
 
@@ -209,7 +216,15 @@ def llm_ping() -> None:
 @app.command()
 def verify(csv_path: Path) -> None:
     """Verify candidate addresses from a CSV without sending email."""
+    _require_smtp_mail_from()
     asyncio.run(_verify_csv(csv_path))
+
+
+def _require_smtp_mail_from() -> None:
+    problem = smtp_mail_from_problem(settings.smtp_mail_from)
+    if problem:
+        console.print(f"[red]SMTP checks refused:[/] {problem}")
+        raise typer.Exit(code=2)
 
 
 @app.command("walk")
@@ -270,6 +285,7 @@ def walk_command(
 
         async def verify_fn(candidates: list[EmailCandidate]):
             return await verify_candidates(contact, candidates, settings)
+
         starts = seed_urls(company_domain)
     try:
         result = asyncio.run(
@@ -324,10 +340,12 @@ def _persist_walk_result(result: WalkResult) -> None:
         if company:
             company_id = int(company["id"])
         else:
-            company_id = int(conn.execute(
-                "INSERT INTO company(name,domain,source,created_at) VALUES(?,?,?,?)",
-                (contact.company or contact.domain, contact.domain.lower(), "walk", now),
-            ).lastrowid)
+            company_id = int(
+                conn.execute(
+                    "INSERT INTO company(name,domain,source,created_at) VALUES(?,?,?,?)",
+                    (contact.company or contact.domain, contact.domain.lower(), "walk", now),
+                ).lastrowid
+            )
         person = conn.execute(
             "SELECT id FROM person WHERE company_id=? AND first_name=? AND last_name=? "
             "ORDER BY id LIMIT 1",
@@ -340,12 +358,22 @@ def _persist_walk_result(result: WalkResult) -> None:
                 (contact.title, result.status, result.stop_reason, now, person_id),
             )
         else:
-            person_id = int(conn.execute(
-                """INSERT INTO person(company_id,first_name,last_name,title,status,stop_reason,
+            person_id = int(
+                conn.execute(
+                    """INSERT INTO person(company_id,first_name,last_name,title,status,stop_reason,
                    created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)""",
-                (company_id, contact.first_name, contact.last_name, contact.title,
-                 result.status, result.stop_reason, now, now),
-            ).lastrowid)
+                    (
+                        company_id,
+                        contact.first_name,
+                        contact.last_name,
+                        contact.title,
+                        result.status,
+                        result.stop_reason,
+                        now,
+                        now,
+                    ),
+                ).lastrowid
+            )
         result.person_id = person_id
         for kind, value, professional in result.evidence:
             conn.execute(
@@ -364,10 +392,20 @@ def _persist_walk_result(result: WalkResult) -> None:
                    verification_method=excluded.verification_method,
                    verification_verdict=excluded.verification_verdict,
                    confidence=excluded.confidence,notes=excluded.notes,created_at=excluded.created_at""",
-                (person_id, item.email, item.pattern, item.source, item.evidence_tier,
-                 int(item.found_on_web), int(item.catch_all_domain is True),
-                 item.verification_method.value, item.verification_verdict.value,
-                 item.confidence, item.notes, now),
+                (
+                    person_id,
+                    item.email,
+                    item.pattern,
+                    item.source,
+                    item.evidence_tier,
+                    int(item.found_on_web),
+                    int(item.catch_all_domain is True),
+                    item.verification_method.value,
+                    item.verification_verdict.value,
+                    item.confidence,
+                    item.notes,
+                    now,
+                ),
             )
         conn.commit()
     finally:
@@ -397,9 +435,7 @@ async def _verify_csv(csv_path: Path) -> None:
                 domain=row["domain"],
             )
             candidates.append(
-                EmailCandidate(
-                    email=row["email"], contact=contact, source="csv", confidence=0.5
-                )
+                EmailCandidate(email=row["email"], contact=contact, source="csv", confidence=0.5)
             )
     results = (
         await verify_candidates(candidates[0].contact, candidates, settings) if candidates else []

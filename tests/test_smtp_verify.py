@@ -20,6 +20,7 @@ from leadforge.tools.smtp_verify import (
     classify,
     is_valid_syntax,
     resolve_mx,
+    smtp_mail_from_problem,
     verify_candidates,
 )
 
@@ -40,7 +41,7 @@ def make_candidate(email: str, confidence: float = 0.9) -> EmailCandidate:
 def make_settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
         "_env_file": None,
-        "smtp_mail_from": "verify@example.test",
+        "smtp_mail_from": "verify@company.org",
         "smtp_timeout_seconds": 2.0,
         "smtp_max_concurrent": 3,
         "request_delay_seconds": 0.0,
@@ -54,6 +55,15 @@ def test_syntax() -> None:
     assert not is_valid_syntax("jane@@example.com")
     assert not is_valid_syntax("jane@localhost")
     assert not is_valid_syntax("")
+
+
+def test_mail_from_requires_non_placeholder_real_address() -> None:
+    assert smtp_mail_from_problem(None)
+    assert smtp_mail_from_problem("")
+    assert smtp_mail_from_problem("verify@yourdomain.com")
+    assert smtp_mail_from_problem("verify@example.test")
+    assert smtp_mail_from_problem("not-an-address")
+    assert smtp_mail_from_problem("operator@company.org") is None
 
 
 def test_classify() -> None:
@@ -198,9 +208,7 @@ async def test_resolve_mx_uses_explicit_nameservers(monkeypatch) -> None:
     monkeypatch.setattr(
         "leadforge.tools.smtp_verify.dns.asyncresolver.Resolver", lambda **kwargs: resolver
     )
-    assert await resolve_mx("example.test", nameservers=["1.1.1.1"]) == [
-        "mx.example.test"
-    ]
+    assert await resolve_mx("example.test", nameservers=["1.1.1.1"]) == ["mx.example.test"]
     assert resolver.nameservers == ["1.1.1.1"]
 
 

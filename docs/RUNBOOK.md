@@ -48,3 +48,9 @@ Replay mode reads only the fixture manifest and HTML files. It makes no HTTP, LL
 ## LLM connectivity
 
 `leadforge llm-ping` sends one small JSON request to the configured OpenAI-compatible endpoint. It prints `LLM not configured` and exits successfully when the three LLM settings are missing. The automated tests use fake HTTP responses; do not run the ping until the operator authorizes a live smoke test.
+# SMTP verification setup
+
+Before running `leadforge verify` or `leadforge enrich`, set
+`LEADFORGE_SMTP_MAIL_FROM` to a valid address at a domain the operator controls.
+The verifier uses this value only for the SMTP `MAIL FROM` command; it never
+sends message data. An empty value or the sample placeholder is refused.
