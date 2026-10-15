@@ -80,3 +80,18 @@ class OperatorProfile(BaseModel):
     adjacent_titles: list[str] = Field(default_factory=list)
     seniority: list[str] = Field(default_factory=lambda: ["internship", "entry"])
     location_preferences: list[str] = Field(default_factory=lambda: ["India", "remote"])
+
+
+class SearchHit(BaseModel):
+    title: str
+    url: str
+    snippet: str = ""
+
+
+class PersonCandidate(BaseModel):
+    name: str
+    title: str
+    company: str
+    url: str
+    snippet: str
+    source: str

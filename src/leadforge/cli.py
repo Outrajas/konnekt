@@ -10,6 +10,7 @@ from typing import Annotated
 import dns.resolver
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from leadforge import __version__
 from leadforge.config import settings
@@ -18,6 +19,13 @@ from leadforge.llm import LLMNotConfigured, LLMOutputError, chat_json
 from leadforge.llm.prompts import PROMPT_VERSION, SYSTEM_PROMPT
 from leadforge.llm.schemas import PingResponse
 from leadforge.models import Contact, EmailCandidate, OperatorProfile
+from leadforge.sources.search import (
+    ReplaySearchProvider,
+    SearxngProvider,
+    dedupe_people,
+    parse_person_snippet,
+    person_query,
+)
 from leadforge.stages.discovery import (
     discover_company_jobs,
     discover_hn_signals,
@@ -258,6 +266,53 @@ def discover(
     output_path = settings.output_dir / "discovered_jobs.csv"
     save_jobs(jobs, output_path)
     console.print(f"Discovered {len(jobs)} jobs → {output_path}")
+
+
+@app.command("people")
+def people(
+    company: str = typer.Option(..., "--company"),
+    domain: str = typer.Option(..., "--domain"),
+    max_people: Annotated[int, typer.Option("--max", min=1, max=50)] = 5,
+    replay: Annotated[Path | None, typer.Option("--replay", exists=True, file_okay=False)] = None,
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    """Find candidate names from search snippets; result URLs are never fetched."""
+    query = person_query(company, domain, settings)
+    if dry_run:
+        host = (
+            "replay fixture"
+            if replay
+            else settings.searxng_base_url or "no live provider configured"
+        )
+        console.print(f"Would search {host} for: {query}; no request made")
+        return
+    if replay is not None:
+        provider = ReplaySearchProvider(replay)
+    else:
+        companies_path = settings.input_dir / "companies.csv"
+        profile_path = settings.data_dir / "profile.json"
+        if not companies_path.is_file() or not profile_path.is_file():
+            console.print(
+                "[red]Live people search refused:[/] provide data/input/companies.csv "
+                "and ingest a resume first."
+            )
+            raise typer.Exit(code=2)
+        if not settings.searxng_base_url:
+            console.print(
+                "[red]Live people search unavailable:[/] configure SearxNG or provide "
+                "the required DuckDuckGo markup snapshot first."
+            )
+            raise typer.Exit(code=2)
+        provider = SearxngProvider(settings.searxng_base_url, fetcher=Fetcher(settings))
+    hits = asyncio.run(provider.search(query))
+    candidates = dedupe_people(
+        [candidate for hit in hits if (candidate := parse_person_snippet(hit, company))]
+    )[:max_people]
+    table = Table("Name", "Title", "Company", "Source URL")
+    for candidate in candidates:
+        table.add_row(candidate.name, candidate.title, candidate.company, candidate.url)
+    console.print(table)
+    console.print(f"People candidates: {len(candidates)}")
 
 
 def _terminal_safe_text(value: str, encoding: str | None = None) -> str:
