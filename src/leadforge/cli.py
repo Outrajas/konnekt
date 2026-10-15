@@ -1,6 +1,7 @@
 import asyncio
 import csv
 import shutil
+import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -51,10 +52,17 @@ def doctor() -> None:
     policy = DomainPolicy.load(settings.domain_policy_path, settings)
     console.print(f"[bold]Tier 1 backend:[/] {tier1_backend()}")
     obscura = settings.obscura_path
-    tier2_status = (
-        str(obscura) if obscura and obscura.exists() else "disabled (OBSCURA_PATH not set)"
-    )
-    console.print(f"[bold]Tier 2:[/] {tier2_status}")
+    if obscura and obscura.is_file():
+        console.print(f"[bold]Obscura:[/] {_obscura_version(obscura)} ({obscura})")
+        console.print("[bold]Tier 2:[/] enabled")
+    else:
+        bundled_obscura = Path("bin/obscura/obscura.exe")
+        if bundled_obscura.is_file():
+            console.print(
+                f"[bold]Obscura binary:[/] {_obscura_version(bundled_obscura)} "
+                f"(not configured: {bundled_obscura.resolve()})"
+            )
+        console.print("[bold]Tier 2:[/] disabled (OBSCURA_PATH not set)")
     try:
         from scrapling.fetchers import Fetcher as _ScraplingFetcher  # noqa: F401
         scrapling_available = True
@@ -118,6 +126,21 @@ def _show_platform_budgets() -> None:
         )
         rule = DomainPolicy.load(settings.domain_policy_path, settings).resolve(platform)
         console.print(f"  {platform}: {used}/{rule.daily_cap}")
+
+
+def _obscura_version(executable: Path) -> str:
+    try:
+        completed = subprocess.run(
+            [str(executable), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "version unavailable"
+    version_text = completed.stdout.strip() or completed.stderr.strip()
+    return version_text or "version unavailable"
 
 
 @app.command()

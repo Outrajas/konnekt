@@ -14,7 +14,8 @@
 ## Web fetch baseline
 
 - Tier 1 uses Scrapling's HTTP `Fetcher` when importable, isolated in a worker thread; otherwise it uses `httpx`. Neither path persists cookies or accepts credentials. `tldextract` uses its bundled suffix data to avoid an unplanned network update during policy resolution.
-- Tier 2 is implemented as a subprocess adapter but remains unavailable until Obscura is installed and its CLI flags are verified in Phase 7. Tier 3 remains unavailable in this baseline.
+- Tier 2 is implemented as a subprocess adapter and remains unavailable until its path is explicitly configured. Tier 3 remains unavailable in this baseline.
+- The operator-provided Obscura `0.2.4` and worker are present together under ignored `bin/obscura/`. The help output shows `--quiet` is a `fetch` option, so the adapter places it after the subcommand. Both text and HTML fetch smoke checks against `https://example.com` passed. The release ZIP/tag was not present to verify; the local executable SHA-256 values are `42CB7BEF9EF4C946312E59411D69B12164146D95A5C8E40B92E275347E124CC1` (`obscura.exe`) and `2609011D104BCE4724A1968D802CD71BA55F283EB285DBB1570099B1C4DD25E3` (`obscura-worker.exe`). Tier 2 stays disabled until `OBSCURA_PATH` is configured.
 - Tier 3 intentionally stays off; revisit only if the Phase 16 benchmark shows a concrete need.
 - The live Tier 1 acceptance fetch and persistent-cache repeat succeeded against `example.com` after the sandbox network restriction was lifted for those checks. Doctor's independent port 25 probe remains blocked by DNS/network egress in this environment.
 

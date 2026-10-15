@@ -17,7 +17,7 @@ leadforge init-db
 leadforge fetch https://company.example/contact --text
 ```
 
-The fetch router applies host policy, robots rules, budgets, block pauses, and cache behavior. Tier 2 remains unavailable until `LEADFORGE_OBSCURA_PATH` points to the verified binary.
+The fetch router applies host policy, robots rules, budgets, block pauses, and cache behavior. Tier 2 remains unavailable until `OBSCURA_PATH` points to the verified binary.
 
 ## Verify a CSV
 

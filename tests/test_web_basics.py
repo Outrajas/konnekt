@@ -146,9 +146,10 @@ def test_obscura_argv_is_a_list_and_tier_three_stays_disabled() -> None:
     from leadforge.web.errors import TierUnavailable
     from leadforge.web.tiers.stealth import require_allowed
     assert build_argv("obscura.exe", "https://example.test", 20, stealth=False) == [
-        "obscura.exe", "--quiet", "fetch", "https://example.test", "--dump", "html",
-        "--timeout", "20",
+        "obscura.exe", "fetch", "https://example.test", "--dump", "html",
+        "--timeout", "20", "--quiet",
     ]
+    assert build_argv("obscura.exe", "https://example.test", 20, stealth=True)[-1] == "--stealth"
     with pytest.raises(TierUnavailable, match="disabled by domain policy"):
         require_allowed(DomainRule(max_tier=2, allow_challenge_solving=False))
 

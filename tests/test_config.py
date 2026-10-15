@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from leadforge.config import Settings
 
 
@@ -16,3 +18,9 @@ def test_secret_is_redacted_from_settings_repr() -> None:
     secret = "test-only-never-print-this-key"
     settings = Settings(_env_file=None, llm_api_key=secret)
     assert secret not in repr(settings)
+
+
+def test_obscura_path_uses_operator_named_environment_variable(monkeypatch) -> None:
+    monkeypatch.setenv("OBSCURA_PATH", "bin/obscura/obscura.exe")
+    settings = Settings(_env_file=None)
+    assert settings.obscura_path == Path("bin/obscura/obscura.exe")
