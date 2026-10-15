@@ -45,3 +45,4 @@
 
 - Live discovery, people search, walk, and enrichment require the operator's companies CSV and an ingested resume profile. Replay modes remain offline and do not require a real SMTP identity or LLM key.
 - The sample enrichment fixture demonstrates a published Tier-A address at `.invalid`; it stays below the 0.40 send threshold, so the enriched output shows it as `unknown` and the review file remains empty. Drafts are manual-personalization markers unless professional project evidence exists.
+- The tier benchmark is implemented with a no-request `--dry-run` mode. No live benchmark was run because the operator domain list is absent.

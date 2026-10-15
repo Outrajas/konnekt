@@ -34,9 +34,9 @@ def response(content: str, status_code: int = 200, headers: dict[str, str] | Non
     return Response(
         status_code,
         headers=headers,
-        json={"choices": [{"message": {"content": content}}]} if status_code == 200 else {
-            "error": {"message": "temporary"}
-        },
+        json={"choices": [{"message": {"content": content}}]}
+        if status_code == 200
+        else {"error": {"message": "temporary"}},
     )
 
 
@@ -155,9 +155,7 @@ async def test_chat_json_enforces_persistent_daily_cap(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_not_configured_fails_without_http_request(tmp_path) -> None:
-    client = LLMClient(
-        make_settings(tmp_path, llm_base_url=None, llm_api_key=None, llm_model=None)
-    )
+    client = LLMClient(make_settings(tmp_path, llm_base_url=None, llm_api_key=None, llm_model=None))
     with pytest.raises(LLMNotConfigured):
         await client.chat_json("sys", "usr", Ping)
 

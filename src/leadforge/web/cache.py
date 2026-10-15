@@ -14,12 +14,14 @@ TRACKING_PREFIXES = ("utm_",)
 def normalize_url(url: str) -> str:
     parts = urlsplit(url)
     query = sorted(
-        (key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
         if not key.lower().startswith(TRACKING_PREFIXES)
     )
     path = parts.path or "/"
-    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path,
-                       urlencode(query, doseq=True), ""))
+    return urlunsplit(
+        (parts.scheme.lower(), parts.netloc.lower(), path, urlencode(query, doseq=True), "")
+    )
 
 
 class PageCache:
@@ -43,8 +45,17 @@ class PageCache:
         if body_path is None or not body_path.exists():
             return None
         html = body_path.read_text(encoding="utf-8")
-        return FetchResult(url, row["url"], row["status_code"], html, "", row["tier"], True,
-                           bool(row["blocked"]), row["fetched_at"])
+        return FetchResult(
+            url,
+            row["url"],
+            row["status_code"],
+            html,
+            "",
+            row["tier"],
+            True,
+            bool(row["blocked"]),
+            row["fetched_at"],
+        )
 
     def put(self, result: FetchResult, *, ttl_hours: int | None = None) -> None:
         key = self.key(result.url)
@@ -71,8 +82,10 @@ class PageCache:
                     int(result.blocked),
                     result.fetched_at or clock.utcnow_iso(),
                     (
-                        now + (
-                            timedelta(hours=ttl_hours) if ttl_hours is not None
+                        now
+                        + (
+                            timedelta(hours=ttl_hours)
+                            if ttl_hours is not None
                             else timedelta(days=self.settings.cache_ttl_days)
                         )
                     ).isoformat(),

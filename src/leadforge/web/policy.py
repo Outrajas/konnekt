@@ -33,11 +33,14 @@ class DomainPolicy:
         settings = settings or Settings()
         if not path.exists():
             log.warning("Domain policy file missing; using settings defaults: %s", path)
-            return cls({}, DomainRule(
-                min_delay_s=settings.default_domain_min_delay_s,
-                max_delay_s=settings.default_domain_max_delay_s,
-                daily_cap=settings.default_domain_daily_cap,
-            ))
+            return cls(
+                {},
+                DomainRule(
+                    min_delay_s=settings.default_domain_min_delay_s,
+                    max_delay_s=settings.default_domain_max_delay_s,
+                    daily_cap=settings.default_domain_daily_cap,
+                ),
+            )
         try:
             with path.open("rb") as handle:
                 raw = tomllib.load(handle)
@@ -49,8 +52,11 @@ class DomainPolicy:
             daily_cap=settings.default_domain_daily_cap,
         )
         default = _rule(raw.get("default", {}), settings_default)
-        rules = {host.lower(): _rule(values, default) for host, values in raw.items()
-                 if host != "default" and isinstance(values, dict)}
+        rules = {
+            host.lower(): _rule(values, default)
+            for host, values in raw.items()
+            if host != "default" and isinstance(values, dict)
+        }
         return cls(rules, default)
 
     def resolve(self, host: str) -> DomainRule:
@@ -71,12 +77,9 @@ class DomainPolicy:
 
 def _rule(values: dict[str, object], base: DomainRule) -> DomainRule:
     allowed = DomainRule.__dataclass_fields__
-    selected = {
-        key: values.get(key, getattr(base, key))
-        for key in allowed
-    }
+    selected = {key: values.get(key, getattr(base, key)) for key in allowed}
     try:
-        rule = DomainRule(**selected)
+        rule = DomainRule(**selected)  # type: ignore[arg-type]  # keys/types validated below
     except TypeError as exc:
         raise ValueError(f"Invalid domain policy rule: {exc}") from exc
     if not isinstance(rule.enabled, bool) or not isinstance(rule.obey_robots, bool):

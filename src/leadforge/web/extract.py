@@ -119,8 +119,12 @@ def extract_links(
         except DeniedHost:
             continue
         seen.add(clean_url)
-        rel_value = anchor.get("rel", [])
-        rel = tuple(sorted(str(value).lower() for value in rel_value))
+        rel_value = anchor.get("rel")
+        if isinstance(rel_value, str):
+            rel_items = rel_value.split()
+        else:
+            rel_items = rel_value or []
+        rel = tuple(sorted(str(value).lower() for value in rel_items))
         links.append(
             Link(
                 url=clean_url,
@@ -152,7 +156,7 @@ def extract_emails(html_and_text: str) -> list[FoundEmail]:
             return
         if obfuscated:
             context_text = context_source or source
-            context = context_text[max(0, start - 100):start + len(raw) + 100]
+            context = context_text[max(0, start - 100) : start + len(raw) + 100]
             if not _CONTACT_CONTEXT.search(BeautifulSoup(context, "lxml").get_text(" ")):
                 return
         found.setdefault(normalized, FoundEmail(normalized, raw))
@@ -174,8 +178,11 @@ def extract_emails(html_and_text: str) -> list[FoundEmail]:
             if tld:
                 domain = f"{domain.rstrip('.')} . {tld}".replace(" ", "")
             add(
-                f"{match.group('local')}@{domain}", match.group(0), obfuscated=True,
-                start=match.start(), context_source=visible_text,
+                f"{match.group('local')}@{domain}",
+                match.group(0),
+                obfuscated=True,
+                start=match.start(),
+                context_source=visible_text,
             )
     return list(found.values())
 
@@ -188,7 +195,11 @@ def _is_usable_email(address: str) -> bool:
     local = local.lower().split("+", 1)[0]
     domain = domain.lower().rstrip(".")
     if local in _IGNORED_LOCAL or domain in {
-        "example.com", "example.org", "example.net", "example", "test"
+        "example.com",
+        "example.org",
+        "example.net",
+        "example",
+        "test",
     }:
         return False
     if domain.endswith((".test", ".example")) or domain.startswith("example."):
@@ -208,13 +219,15 @@ def classify_host(
 ) -> HostKind:
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
-    if host in {"github.com", "www.github.com"} and len(
-        [segment for segment in parts.path.split("/") if segment]
-    ) == 1:
+    if (
+        host in {"github.com", "www.github.com"}
+        and len([segment for segment in parts.path.split("/") if segment]) == 1
+    ):
         return "github"
-    if host in {"gitlab.com", "www.gitlab.com"} and len(
-        [segment for segment in parts.path.split("/") if segment]
-    ) == 1:
+    if (
+        host in {"gitlab.com", "www.gitlab.com"}
+        and len([segment for segment in parts.path.split("/") if segment]) == 1
+    ):
         return "gitlab"
     if host.startswith("lists."):
         return "mail_archive"

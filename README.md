@@ -34,3 +34,12 @@ router; no command sends email.
 For optional live people search, set `LEADFORGE_SEARXNG_BASE_URL` to your local
 SearxNG instance. The DuckDuckGo adapter is waiting on a real response snapshot
 after operator inputs are supplied.
+
+The tier benchmark requires an operator-owned `data/input/benchmark_domains.txt`.
+Inspect its request plan first with:
+
+```powershell
+python scripts/benchmark_tiers.py --domains data/input/benchmark_domains.txt --dry-run
+```
+
+The live benchmark has not been run.

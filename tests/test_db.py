@@ -63,16 +63,28 @@ def test_repository_helpers_round_trip(conn) -> None:
     )
     person_id = add_person(conn, company_id=company_id, first_name="Jane", last_name="Doe")
     page_id = add_page(
-        conn, url="https://example.test/team", url_hash="hash1", host="example.test",
-        tier=1, expires_at="2026-02-01T00:00:00+00:00",
+        conn,
+        url="https://example.test/team",
+        url_hash="hash1",
+        host="example.test",
+        tier=1,
+        expires_at="2026-02-01T00:00:00+00:00",
     )
     evidence_id = add_evidence(
-        conn, person_id=person_id, page_id=page_id, kind="name_title", value="Jane Doe",
+        conn,
+        person_id=person_id,
+        page_id=page_id,
+        kind="name_title",
+        value="Jane Doe",
         professional=True,
     )
     candidate_id = add_candidate(
-        conn, person_id=person_id, email="jane@example.test", source="published",
-        evidence_tier="A", found_on_web=True,
+        conn,
+        person_id=person_id,
+        email="jane@example.test",
+        source="published",
+        evidence_tier="A",
+        found_on_web=True,
     )
     set_domain_pattern(conn, domain="example.test", pattern="first", sample_count=2)
     pattern = get_domain_pattern(conn, "example.test")

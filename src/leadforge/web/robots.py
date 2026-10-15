@@ -44,8 +44,8 @@ class RobotsChecker:
                         async with httpx.AsyncClient(
                             timeout=self.timeout, follow_redirects=True
                         ) as client:
-                            response = await client.get(robots_url)
-                        status_code, body = response.status_code, response.text
+                            http_response = await client.get(robots_url)
+                        status_code, body = http_response.status_code, http_response.text
                 except (httpx.HTTPError, OSError, TimeoutError) as exc:
                     log.warning("Robots unavailable for %s: %s", parts.hostname, exc)
                     self._cache[origin] = (None, None)
@@ -54,8 +54,15 @@ class RobotsChecker:
                 if status_code and status_code < 500 and self.cache_put is not None:
                     self.cache_put(
                         FetchResult(
-                            robots_url, robots_url, status_code, body, "", 1, False,
-                            status_code >= 400, clock.utcnow_iso(),
+                            robots_url,
+                            robots_url,
+                            status_code,
+                            body,
+                            "",
+                            1,
+                            False,
+                            status_code >= 400,
+                            clock.utcnow_iso(),
                         ),
                         ttl_hours=24,
                     )
@@ -74,7 +81,9 @@ class RobotsChecker:
                         self.crawl_delays[parts.hostname or ""] = float(delay)
                     self._cache[origin] = (parser, status_code)
                     self._cache_expires[origin] = time.monotonic() + 24 * 60 * 60
-        parser, status = self._cache[origin]
+        cached_parser, status = self._cache[origin]
         if status is not None and status >= 500:
             return False
-        return parser.can_fetch(user_agent or self.user_agent, url) if parser else True
+        return (
+            cached_parser.can_fetch(user_agent or self.user_agent, url) if cached_parser else True
+        )

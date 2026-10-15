@@ -13,8 +13,18 @@ from leadforge.models import Contact, EmailCandidate
 Pattern = Callable[[str, str], str]
 
 _DEFAULT_ORDER = (
-    "first.last", "flast", "firstlast", "first", "last", "f.last", "first.l",
-    "firstl", "last.first", "lastf", "first_last", "first-last",
+    "first.last",
+    "flast",
+    "firstlast",
+    "first",
+    "last",
+    "f.last",
+    "first.l",
+    "firstl",
+    "last.first",
+    "lastf",
+    "first_last",
+    "first-last",
 )
 _PATTERNS: dict[str, Pattern] = {
     "first": lambda first, last: first,

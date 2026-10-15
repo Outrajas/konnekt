@@ -10,6 +10,7 @@ import string
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Protocol
 
 import aiosmtplib
 import dns.asyncresolver
@@ -65,6 +66,12 @@ class Unreachable(Exception):
 
 MxResolver = Callable[[str], Awaitable[list[str]]]
 ProbeFn = Callable[[list[str], str, str, str, float, tuple[int, ...]], Awaitable[Probe]]
+
+
+class _AsyncWriter(Protocol):
+    def close(self) -> None: ...
+
+    async def wait_closed(self) -> None: ...
 
 
 class Port25Status(str, Enum):  # noqa: UP042 - preserve string-enum behavior
@@ -197,7 +204,7 @@ async def check_port25_status(
     timeout_seconds: float = 5.0,
     *,
     mx_resolver: MxResolver | None = None,
-    socket_connector: Callable[..., Awaitable[tuple[object, object]]] | None = None,
+    socket_connector: Callable[..., Awaitable[tuple[object, _AsyncWriter]]] | None = None,
 ) -> Port25Status:
     """Distinguish DNS failure from TCP timeout while checking a Gmail MX."""
     try:
@@ -247,6 +254,7 @@ async def verify_candidates(
     mail_from_problem = smtp_mail_from_problem(mail_from)
     if mail_from_problem:
         raise RuntimeError(mail_from_problem)
+    assert mail_from is not None
 
     delay = max(0.0, settings.request_delay_seconds)
     max_concurrency = max(1, settings.smtp_max_concurrent)
@@ -399,6 +407,6 @@ def verify_candidates_sync(
     contact: Contact,
     candidates: list[EmailCandidate],
     settings: Settings | None = None,
-    **kwargs: object,
+    **kwargs: Any,
 ) -> list[EmailCandidate]:
     return asyncio.run(verify_candidates(contact, candidates, settings, **kwargs))

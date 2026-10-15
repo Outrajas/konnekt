@@ -39,9 +39,7 @@ def record_pattern_sample(
     ).fetchall()
     maximum = max(int(row["n"]) for row in counts)
     tied = [row["pattern"] for row in counts if int(row["n"]) == maximum]
-    prior = conn.execute(
-        "SELECT pattern FROM domain_pattern WHERE domain=?", (domain,)
-    ).fetchone()
+    prior = conn.execute("SELECT pattern FROM domain_pattern WHERE domain=?", (domain,)).fetchone()
     majority = prior["pattern"] if prior and prior["pattern"] in tied else tied[0]
     total = sum(int(row["n"]) for row in counts)
     conn.execute(

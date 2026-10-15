@@ -85,3 +85,19 @@ def test_live_walk_refuses_without_operator_inputs(monkeypatch) -> None:
 
     assert result.exit_code == 2
     assert "provide data/input/companies.csv" in result.output
+
+
+def test_doctor_warns_on_empty_mail_from_and_legacy_placeholder(monkeypatch) -> None:
+    async def reachable_port25(**_kwargs):
+        return cli.Port25Status.REACHABLE
+
+    monkeypatch.setattr(cli.settings, "smtp_mail_from", None)
+    monkeypatch.setattr(cli.settings, "smtp_from_address", "verify@yourdomain.com")
+    monkeypatch.setattr(cli, "check_port25_status", reachable_port25)
+
+    result = CliRunner().invoke(cli.app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "SMTP MAIL FROM: (empty)" in result.output
+    assert "Legacy SMTP from: verify@yourdomain.com" in result.output
+    assert "LEADFORGE_SMTP_MAIL_FROM" in result.output

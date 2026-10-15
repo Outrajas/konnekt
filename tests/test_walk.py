@@ -116,8 +116,12 @@ async def test_walk_stops_after_two_consecutive_stale_hops() -> None:
         return PageExtraction(page_kind="team")
 
     result = await walk_person(
-        person_id=1, contact=CONTACT, fetch_fn=fetch, llm_fn=llm,
-        verify_fn=noop_verify, seed_urls_override=urls,
+        person_id=1,
+        contact=CONTACT,
+        fetch_fn=fetch,
+        llm_fn=llm,
+        verify_fn=noop_verify,
+        seed_urls_override=urls,
     )
     assert result.stop_reason == "stale"
     assert len(result.pages_visited) == 2
@@ -140,8 +144,12 @@ async def test_walk_never_follows_denylisted_link_even_if_llm_proposes_it() -> N
         )
 
     result = await walk_person(
-        person_id=1, contact=CONTACT, fetch_fn=fetch, llm_fn=llm,
-        verify_fn=noop_verify, seed_urls_override=["https://acme.invalid/team"],
+        person_id=1,
+        contact=CONTACT,
+        fetch_fn=fetch,
+        llm_fn=llm,
+        verify_fn=noop_verify,
+        seed_urls_override=["https://acme.invalid/team"],
         denylist_hosts={"blocked.invalid"},
     )
     assert calls == ["https://acme.invalid/team"]
@@ -165,8 +173,12 @@ async def test_walk_never_follows_url_not_in_extracted_candidates() -> None:
         )
 
     await walk_person(
-        person_id=1, contact=CONTACT, fetch_fn=fetch, llm_fn=llm,
-        verify_fn=noop_verify, seed_urls_override=["https://acme.invalid/team"],
+        person_id=1,
+        contact=CONTACT,
+        fetch_fn=fetch,
+        llm_fn=llm,
+        verify_fn=noop_verify,
+        seed_urls_override=["https://acme.invalid/team"],
     )
     assert calls == ["https://acme.invalid/team"]
 
@@ -189,8 +201,12 @@ async def test_walk_ignores_email_on_page_that_fails_authorship_test() -> None:
         return extraction_for(kwargs["candidate_links"])
 
     result = await walk_person(
-        person_id=1, contact=CONTACT, fetch_fn=fetch, llm_fn=llm,
-        verify_fn=noop_verify, seed_urls_override=["https://acme.invalid/team"],
+        person_id=1,
+        contact=CONTACT,
+        fetch_fn=fetch,
+        llm_fn=llm,
+        verify_fn=noop_verify,
+        seed_urls_override=["https://acme.invalid/team"],
     )
     assert calls == ["https://acme.invalid/team", "https://stranger.github.io/"]
     assert result.status == "not_found"
@@ -213,8 +229,12 @@ async def test_walk_degrades_to_heuristic_order_when_llm_not_configured() -> Non
         raise LLMNotConfigured("no key")
 
     result = await walk_person(
-        person_id=1, contact=CONTACT, fetch_fn=fetch, llm_fn=missing_llm,
-        verify_fn=noop_verify, seed_urls_override=["https://acme.invalid/team"],
+        person_id=1,
+        contact=CONTACT,
+        fetch_fn=fetch,
+        llm_fn=missing_llm,
+        verify_fn=noop_verify,
+        seed_urls_override=["https://acme.invalid/team"],
     )
     assert result.status == "found"
     assert result.pages_visited[-1] == "https://jane.github.io/"
@@ -231,8 +251,12 @@ async def test_walk_wall_clock_stop_uses_injected_clock() -> None:
         return extraction_for(kwargs["candidate_links"])
 
     result = await walk_person(
-        person_id=1, contact=CONTACT, fetch_fn=fetch, llm_fn=llm,
-        verify_fn=noop_verify, clock=lambda: next(ticks),
+        person_id=1,
+        contact=CONTACT,
+        fetch_fn=fetch,
+        llm_fn=llm,
+        verify_fn=noop_verify,
+        clock=lambda: next(ticks),
         budget=WalkBudget(wall_clock_s=600),
         seed_urls_override=["https://acme.invalid/team"],
     )
@@ -253,9 +277,14 @@ async def test_walk_marks_denied_seed_and_persists_stop_state() -> None:
         return PageExtraction(page_kind="other")
 
     result = await walk_person(
-        person_id=7, contact=CONTACT, fetch_fn=fetch, llm_fn=llm,
-        verify_fn=noop_verify, seed_urls_override=["https://denied.invalid/team"],
-        denylist_hosts={"denied.invalid"}, persist_fn=lambda value: persisted.append(value),
+        person_id=7,
+        contact=CONTACT,
+        fetch_fn=fetch,
+        llm_fn=llm,
+        verify_fn=noop_verify,
+        seed_urls_override=["https://denied.invalid/team"],
+        denylist_hosts={"denied.invalid"},
+        persist_fn=lambda value: persisted.append(value),
     )
     assert result.stop_reason == "denied"
     assert calls == []
@@ -275,11 +304,13 @@ async def test_established_pattern_is_verified_before_any_page_fetch() -> None:
     async def verify(candidates: list[EmailCandidate]) -> list[EmailCandidate]:
         verified_batches.append(candidates)
         return [
-            candidates[0].model_copy(update={
-                "verification_method": VerificationMethod.SMTP,
-                "verification_verdict": VerificationVerdict.SEND,
-                "catch_all_domain": False,
-            })
+            candidates[0].model_copy(
+                update={
+                    "verification_method": VerificationMethod.SMTP,
+                    "verification_verdict": VerificationVerdict.SEND,
+                    "catch_all_domain": False,
+                }
+            )
         ]
 
     result = await walk_person(
@@ -331,8 +362,12 @@ async def test_replay_fetcher_serves_recorded_two_hop_walk_offline() -> None:
         raise LLMNotConfigured("replay is deterministic")
 
     result = await walk_person(
-        person_id=1, contact=CONTACT, fetch_fn=fetcher, llm_fn=no_llm,
-        verify_fn=noop_verify, seed_urls_override=fetcher.seeds,
+        person_id=1,
+        contact=CONTACT,
+        fetch_fn=fetcher,
+        llm_fn=no_llm,
+        verify_fn=noop_verify,
+        seed_urls_override=fetcher.seeds,
     )
     assert result.status == "found"
     assert result.stop_reason == "email_found"
@@ -361,8 +396,17 @@ def test_walk_cli_replay_mode_runs_offline_and_persists_result(monkeypatch) -> N
     result = CliRunner().invoke(
         app,
         [
-            "walk", "--company-domain", "acme.invalid", "--first", "Jane", "--last", "Doe",
-            "--title", "Engineering Manager", "--replay", str(replay_dir),
+            "walk",
+            "--company-domain",
+            "acme.invalid",
+            "--first",
+            "Jane",
+            "--last",
+            "Doe",
+            "--title",
+            "Engineering Manager",
+            "--replay",
+            str(replay_dir),
         ],
     )
     assert result.exit_code == 0, result.output
