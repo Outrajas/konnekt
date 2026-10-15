@@ -55,6 +55,10 @@ class EnrichmentResult(BaseModel):
     best_email: EmailCandidate | None = None
     all_candidates: list[EmailCandidate] = Field(default_factory=list)
     enriched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    status: str = "new"
+    stop_reason: str | None = None
+    fetches_used: int = 0
+    provenance: list[str] = Field(default_factory=list)
 
 
 class Job(BaseModel):

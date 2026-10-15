@@ -54,6 +54,7 @@ class WalkResult:
     stop_reason: str
     candidates: list[EmailCandidate]
     pages_visited: list[str]
+    contact: Contact | None = None
     evidence: list[tuple[str, str, bool]] = field(default_factory=list)
 
 
@@ -64,12 +65,16 @@ class WalkPage:
     status: int = 200
 
 
-_ALLOWED_EDGE_KINDS = {
-    "personal_site", "github", "gitlab", "talk", "mail_archive", "company"
-}
+_ALLOWED_EDGE_KINDS = {"personal_site", "github", "gitlab", "talk", "mail_archive", "company"}
 _TEAM_PATHS = (
-    "/team", "/about", "/about-us", "/company", "/people", "/leadership",
-    "/contact", "/careers",
+    "/team",
+    "/about",
+    "/about-us",
+    "/company",
+    "/people",
+    "/leadership",
+    "/contact",
+    "/careers",
 )
 
 
@@ -100,8 +105,7 @@ async def walk_person(
     limits = budget or WalkBudget()
     denied = {host.lower().rstrip(".") for host in (denylist_hosts or set())}
     queue: deque[tuple[str, int, bool]] = deque(
-        (url, 0, False)
-        for url in (seed_urls_override or seed_urls(contact.domain))
+        (url, 0, False) for url in (seed_urls_override or seed_urls(contact.domain))
     )
     visited: set[str] = set()
     pages: list[str] = []
@@ -135,6 +139,7 @@ async def walk_person(
                             stop_reason="email_found",
                             candidates=[checked_candidate],
                             pages_visited=[],
+                            contact=contact,
                             evidence=[("pattern_sample", established_pattern, True)],
                         )
                         if persist_fn is not None:
@@ -288,9 +293,7 @@ async def walk_person(
             verified = await _maybe_await(verify_fn(result_candidates))
             result_candidates = list(verified)
         for candidate in result_candidates:
-            candidate.confidence = score(
-                candidate, source_count=1, pattern_matches_domain=False
-            )
+            candidate.confidence = score(candidate, source_count=1, pattern_matches_domain=False)
     result = WalkResult(
         person_id=person_id,
         status=(
@@ -310,6 +313,7 @@ async def walk_person(
         stop_reason=stop_reason,
         candidates=result_candidates,
         pages_visited=pages,
+        contact=contact,
         evidence=evidence,
     )
     if persist_fn is not None:
@@ -362,7 +366,13 @@ def _target_emails(
     for paragraph in paragraphs:
         if not target_tokens.issubset(_tokens(paragraph)):
             continue
-        nearby = [item for item in found if item.email in paragraph.lower()]
+        lowered_paragraph = paragraph.lower()
+        nearby = [
+            item
+            for item in found
+            if item.email.lower() in lowered_paragraph
+            or item.raw_match.lower() in lowered_paragraph
+        ]
         if len(nearby) == 1:
             return nearby
     return []
@@ -370,9 +380,7 @@ def _target_emails(
 
 def _heuristic_rank(anchor: str, contact: Contact) -> int:
     value = anchor.casefold()
-    hints = (
-        "contact", "about", "blog", "talk", "github", *contact.full_name.casefold().split()
-    )
+    hints = ("contact", "about", "blog", "talk", "github", *contact.full_name.casefold().split())
     return min(
         (index for index, hint in enumerate(hints) if hint and hint in value),
         default=len(hints),

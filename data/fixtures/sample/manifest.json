@@ -1,0 +1,7 @@
+{
+  "seeds": ["https://acme.invalid/team"],
+  "pages": {
+    "https://acme.invalid/team": "team.html",
+    "https://jane.github.io/": "jane.html"
+  }
+}

@@ -70,3 +70,18 @@ company list, an ingested profile, and `LEADFORGE_SEARXNG_BASE_URL`; only result
 snippets are parsed, and result pages are never fetched. DuckDuckGo support is
 not enabled until a real response snapshot can be recorded after operator input
 is available.
+
+## Replay, review, and maintenance
+
+Run the local demo with `leadforge enrich data/input/sample_contacts.csv
+--replay data/fixtures/sample --force`, then inspect the enriched CSV and
+`data/output/review.csv`. The review file includes only sendable candidates and
+leaves `approved` empty. `leadforge drafts --dry-run` previews draft count;
+`leadforge drafts` writes `NEEDS_MANUAL_PERSONALIZATION` when no professional
+project evidence is available. No command sends mail.
+
+Use `leadforge report --since 30` for recent counts and source yields. Expired
+records and cache files can be removed with `leadforge purge --older-than 30`;
+`leadforge purge --all` requires typing `ERASE ALL LEADFORGE RECORDS`. After
+reviewing a block reason, clear a host pause with `leadforge domains unpause
+<host>`.
