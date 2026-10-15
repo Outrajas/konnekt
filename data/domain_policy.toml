@@ -1,0 +1,61 @@
+# Conservative per-domain budgets in seconds. Tier 3 is unavailable by default.
+[default]
+min_delay_s = 3.0
+max_delay_s = 8.0
+daily_cap = 30
+max_tier = 2
+obey_robots = true
+allow_challenge_solving = false
+enabled = true
+
+["linkedin.com"]
+enabled = true
+min_delay_s = 30.0
+max_delay_s = 90.0
+daily_cap = 10
+max_tier = 1
+allow_challenge_solving = false
+
+["glassdoor.com"]
+enabled = true
+min_delay_s = 30.0
+max_delay_s = 90.0
+daily_cap = 10
+max_tier = 1
+allow_challenge_solving = false
+
+["indeed.com"]
+enabled = true
+min_delay_s = 30.0
+max_delay_s = 90.0
+daily_cap = 10
+max_tier = 1
+allow_challenge_solving = false
+
+["duckduckgo.com"]
+enabled = true
+min_delay_s = 20.0
+max_delay_s = 60.0
+daily_cap = 30
+max_tier = 1
+
+["ycombinator.com"]
+enabled = true
+min_delay_s = 5.0
+max_delay_s = 15.0
+daily_cap = 100
+max_tier = 2
+
+["hn.algolia.com"]
+enabled = true
+min_delay_s = 1.0
+max_delay_s = 3.0
+daily_cap = 200
+max_tier = 0
+
+["news.ycombinator.com"]
+enabled = true
+min_delay_s = 2.0
+max_delay_s = 5.0
+daily_cap = 100
+max_tier = 1

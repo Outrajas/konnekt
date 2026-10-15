@@ -1,0 +1,26 @@
+# Personal social platforms
+facebook.com
+instagram.com
+x.com
+twitter.com
+tiktok.com
+snapchat.com
+reddit.com
+
+# People-search and data brokers
+spokeo.com
+whitepages.com
+beenverified.com
+radaris.com
+intelius.com
+peekyou.com
+
+# Paste and dump sites
+pastebin.com
+ghostbin.com
+
+# Breach aggregators
+haveibeenpwned.com
+dehashed.com
+leakcheck.io
+snusbase.com
