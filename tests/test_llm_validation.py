@@ -69,7 +69,8 @@ def test_next_link_ids_map_only_to_extracted_candidates_and_are_capped_at_five()
         next_links=[
             NextLink(candidate_id=index, reason="candidate", expected="bio")
             for index in range(1, 8)
-        ] + [NextLink(url="https://outside.test/", reason="not offered", expected="bio")],
+        ]
+        + [NextLink(url="https://outside.test/", reason="not offered", expected="bio")],
     )
     result = validate_page_extraction(
         extraction,

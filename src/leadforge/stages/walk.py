@@ -289,9 +289,8 @@ async def walk_person(
     result_candidates = list(candidates.values())
     if not result_candidates:
         result_candidates = generate(contact)
-        if verify_fn:
-            verified = await _maybe_await(verify_fn(result_candidates))
-            result_candidates = list(verified)
+        verified = await _maybe_await(verify_fn(result_candidates))
+        result_candidates = list(verified)
         for candidate in result_candidates:
             candidate.confidence = score(candidate, source_count=1, pattern_matches_domain=False)
     result = WalkResult(

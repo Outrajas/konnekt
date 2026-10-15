@@ -12,8 +12,13 @@ from leadforge.web.errors import DeniedHost
 from leadforge.web.extract import FoundEmail, Link
 
 PERSONAL_SOCIAL_HOSTS = {
-    "facebook.com", "instagram.com", "x.com", "twitter.com", "tiktok.com",
-    "snapchat.com", "reddit.com",
+    "facebook.com",
+    "instagram.com",
+    "x.com",
+    "twitter.com",
+    "tiktok.com",
+    "snapchat.com",
+    "reddit.com",
 }
 
 
@@ -46,7 +51,8 @@ def validate_page_extraction(
             continue
         emails = [email for email in person.emails_published if email.lower() in allowed_emails]
         profile_links = [
-            link for link in person.profile_links
+            link
+            for link in person.profile_links
             if link in url_to_id and not _is_denied(link, denied)
         ]
         person_values = person.model_dump()
@@ -72,9 +78,7 @@ def validate_page_extraction(
     values = extraction.model_dump()
     values.update(
         people=people,
-        org_emails=[
-            email for email in extraction.org_emails if email.lower() in allowed_emails
-        ],
+        org_emails=[email for email in extraction.org_emails if email.lower() in allowed_emails],
         next_links=next_links,
     )
     return PageExtraction.model_validate(values)

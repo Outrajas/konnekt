@@ -1,15 +1,7 @@
 import asyncio
-from dataclasses import dataclass
 
 from leadforge.web.errors import FetchFailed, TierUnavailable
-
-
-@dataclass
-class RawResponse:
-    url: str
-    status: int
-    headers: dict[str, str]
-    body: str
+from leadforge.web.tiers.http import RawResponse
 
 
 def build_argv(executable: str, url: str, timeout: int, *, stealth: bool) -> list[str]:
@@ -30,9 +22,7 @@ async def fetch(
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(), timeout=timeout_seconds + 10
-        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds + 10)
     except TimeoutError as exc:
         process.kill()
         await process.wait()

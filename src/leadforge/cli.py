@@ -22,6 +22,7 @@ from leadforge.models import Contact, EmailCandidate, OperatorProfile
 from leadforge.scoring import is_sendable
 from leadforge.sources.search import (
     ReplaySearchProvider,
+    SearchProvider,
     SearxngProvider,
     dedupe_people,
     parse_person_snippet,
@@ -38,6 +39,7 @@ from leadforge.stages.discovery import (
 from leadforge.stages.pattern_learn import is_established, record_pattern_sample
 from leadforge.stages.profile import extract_profile, read_resume, save_profile
 from leadforge.stages.replay import ReplayFetcher
+from leadforge.stages.walk import FetchFn as WalkFetchFn
 from leadforge.stages.walk import WalkBudget, WalkResult, seed_urls, walk_person
 from leadforge.tools.smtp_verify import (
     Port25Status,
@@ -75,9 +77,15 @@ def doctor() -> None:
     console.print(f"[bold]Python:[/] {sys.version.split()[0]}")
     console.print(f"[bold]Data dir:[/] {settings.data_dir.resolve()}")
     console.print(f"[bold]SMTP MAIL FROM:[/] {settings.smtp_mail_from or '(empty)'}")
+    console.print(f"[bold]Legacy SMTP from:[/] {settings.smtp_from_address}")
     mail_from_problem = smtp_mail_from_problem(settings.smtp_mail_from)
     if mail_from_problem:
         console.print(f"[bold yellow]Warning:[/] {mail_from_problem}")
+    if settings.smtp_from_address == "verify@yourdomain.com":
+        console.print(
+            "[bold yellow]Warning:[/] Legacy SMTP from is still the sample placeholder; "
+            "set LEADFORGE_SMTP_MAIL_FROM for verification."
+        )
     dns_nameservers = settings.dns_nameservers or dns.resolver.get_default_resolver().nameservers
     dns_source = "configured" if settings.dns_nameservers else "system"
     console.print(f"[bold]DNS resolver:[/] {', '.join(map(str, dns_nameservers))} ({dns_source})")
@@ -290,6 +298,7 @@ def people(
         )
         console.print(f"Would search {host} for: {query}; no request made")
         return
+    provider: SearchProvider
     if replay is not None:
         provider = ReplaySearchProvider(replay)
     else:
@@ -401,7 +410,7 @@ def walk_command(
         async def offline_verify(candidates):
             return candidates
 
-        fetch_fn = replay_fetcher
+        fetch_operation: WalkFetchFn = replay_fetcher
         llm_fn = offline_llm
         verify_fn = offline_verify
         starts = replay_fetcher.seeds or seed_urls(company_domain)
@@ -433,8 +442,10 @@ def walk_command(
                 prompt_version=PROMPT_VERSION,
             )
 
-        async def fetch_fn(url: str):
+        async def live_fetch(url: str):
             return await fetcher.fetch(url)
+
+        fetch_operation = live_fetch
 
         llm_fn = live_llm
 
@@ -447,7 +458,7 @@ def walk_command(
             walk_person(
                 person_id=0,
                 contact=contact,
-                fetch_fn=fetch_fn,
+                fetch_fn=fetch_operation,
                 llm_fn=llm_fn,
                 verify_fn=verify_fn,
                 budget=WalkBudget(
@@ -495,12 +506,13 @@ def _persist_walk_result(result: WalkResult) -> None:
         if company:
             company_id = int(company["id"])
         else:
-            company_id = int(
-                conn.execute(
-                    "INSERT INTO company(name,domain,source,created_at) VALUES(?,?,?,?)",
-                    (contact.company or contact.domain, contact.domain.lower(), "walk", now),
-                ).lastrowid
+            cursor = conn.execute(
+                "INSERT INTO company(name,domain,source,created_at) VALUES(?,?,?,?)",
+                (contact.company or contact.domain, contact.domain.lower(), "walk", now),
             )
+            if cursor.lastrowid is None:
+                raise RuntimeError("company insert did not return an id")
+            company_id = cursor.lastrowid
         person = conn.execute(
             "SELECT id FROM person WHERE company_id=? AND first_name=? AND last_name=? "
             "ORDER BY id LIMIT 1",
@@ -513,22 +525,23 @@ def _persist_walk_result(result: WalkResult) -> None:
                 (contact.title, result.status, result.stop_reason, now, person_id),
             )
         else:
-            person_id = int(
-                conn.execute(
-                    """INSERT INTO person(company_id,first_name,last_name,title,status,stop_reason,
+            cursor = conn.execute(
+                """INSERT INTO person(company_id,first_name,last_name,title,status,stop_reason,
                    created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)""",
-                    (
-                        company_id,
-                        contact.first_name,
-                        contact.last_name,
-                        contact.title,
-                        result.status,
-                        result.stop_reason,
-                        now,
-                        now,
-                    ),
-                ).lastrowid
+                (
+                    company_id,
+                    contact.first_name,
+                    contact.last_name,
+                    contact.title,
+                    result.status,
+                    result.stop_reason,
+                    now,
+                    now,
+                ),
             )
+            if cursor.lastrowid is None:
+                raise RuntimeError("person insert did not return an id")
+            person_id = cursor.lastrowid
         result.person_id = person_id
         conn.execute(
             "INSERT INTO run_log(ts,stage,level,message) VALUES(?,?,?,?)",
@@ -601,7 +614,7 @@ def enrich(
 
     if replay is not None:
         replay_fetcher = ReplayFetcher(replay)
-        fetch_fn = replay_fetcher
+        fetch_operation: WalkFetchFn = replay_fetcher
 
         async def offline_llm(**kwargs):
             raise LLMNotConfigured("Replay mode uses deterministic extraction")
@@ -639,13 +652,13 @@ def enrich(
                 return candidates
             return await verify_candidates(candidates[0].contact, candidates, settings)
 
-        fetch_fn, llm_fn, verify_fn = live_fetch, live_llm, live_verify
+        fetch_operation, llm_fn, verify_fn = live_fetch, live_llm, live_verify
 
     results = asyncio.run(
         run_enrichment(
             contacts,
             settings=settings,
-            fetch_fn=fetch_fn,
+            fetch_fn=fetch_operation,
             llm_fn=llm_fn,
             verify_fn=verify_fn,
             persist_fn=_persist_walk_result,

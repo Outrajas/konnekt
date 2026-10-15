@@ -46,9 +46,11 @@ class Budget:
                     )
                 if row and row["last_request_at"] and row["day"] == day:
                     last = datetime.fromisoformat(row["last_request_at"])
-                    wait_seconds = (last + timedelta(seconds=self.uniform(
-                        rule.min_delay_s, rule.max_delay_s
-                    )) - now).total_seconds()
+                    wait_seconds = (
+                        last
+                        + timedelta(seconds=self.uniform(rule.min_delay_s, rule.max_delay_s))
+                        - now
+                    ).total_seconds()
                     if wait_seconds > 0:
                         await self.sleep(wait_seconds)
                         now = self.clock().astimezone(UTC)

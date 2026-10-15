@@ -10,7 +10,9 @@ def _insert_id(conn: sqlite3.Connection, table: str, values: dict[str, object]) 
     cursor = conn.execute(
         f"INSERT INTO {table} ({columns}) VALUES ({placeholders})", tuple(values.values())
     )
-    return int(cursor.lastrowid)
+    if cursor.lastrowid is None:
+        raise RuntimeError(f"Insert into {table} did not return an id")
+    return cursor.lastrowid
 
 
 def upsert_company(
@@ -252,8 +254,13 @@ def set_domain_pattern(
            ON CONFLICT(domain) DO UPDATE SET pattern=excluded.pattern,
              sample_count=excluded.sample_count, catch_all=excluded.catch_all,
              last_checked=excluded.last_checked""",
-        (domain, pattern, sample_count, None if catch_all is None else int(catch_all),
-         last_checked or clock.utcnow_iso()),
+        (
+            domain,
+            pattern,
+            sample_count,
+            None if catch_all is None else int(catch_all),
+            last_checked or clock.utcnow_iso(),
+        ),
     )
 
 
@@ -261,9 +268,7 @@ def get_domain_state(conn: sqlite3.Connection, host: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM domain_state WHERE host=?", (host,)).fetchone()
 
 
-def bump_domain_count(
-    conn: sqlite3.Connection, host: str, *, now: str | None = None
-) -> int:
+def bump_domain_count(conn: sqlite3.Connection, host: str, *, now: str | None = None) -> int:
     timestamp = now or clock.utcnow_iso()
     day = datetime.fromisoformat(timestamp).astimezone(UTC).date().isoformat()
     conn.execute(

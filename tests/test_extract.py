@@ -73,8 +73,7 @@ def test_clean_text_fallback_and_paragraph_boundary_truncation() -> None:
 
 def test_extract_links_resolves_relative_urls_and_navigation_metadata() -> None:
     links = extract_links(
-        '<nav><a href="/team" rel="nofollow">Team</a></nav>'
-        '<a href="../contact#email">Contact</a>',
+        '<nav><a href="/team" rel="nofollow">Team</a></nav><a href="../contact#email">Contact</a>',
         "https://jobs.acme.com/company/about",
         denylist=set(),
     )

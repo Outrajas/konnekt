@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -33,15 +34,17 @@ async def fetch(
         "Accept-Language": "en-US,en;q=0.9",
     }
     timeout = httpx.Timeout(settings.http_timeout_seconds)
-    Fetcher = None
+    fetcher_class: Any = None
     if not use_httpx:
         try:
-            from scrapling.fetchers import Fetcher
+            from scrapling.fetchers import Fetcher as scrapling_fetcher
         except ImportError:
             pass
-    if Fetcher is not None:
+        else:
+            fetcher_class = scrapling_fetcher
+    if fetcher_class is not None:
         response = await asyncio.to_thread(
-            Fetcher.get,
+            fetcher_class.get,
             url,
             impersonate="chrome131",
             timeout=settings.http_timeout_seconds,

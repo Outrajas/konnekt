@@ -71,8 +71,10 @@ def test_learning_requires_tier_a_and_two_matching_samples(tmp_path) -> None:
         )
         second_contact = Contact(first_name="John", last_name="Smith", domain="example.com")
         second = EmailCandidate(
-            email="jsmith@example.com", contact=second_contact,
-            source="team page", evidence_tier="A",
+            email="jsmith@example.com",
+            contact=second_contact,
+            source="team page",
+            evidence_tier="A",
         )
         assert record_pattern_sample(conn, contact, first)
         assert not is_established(conn, "example.com")

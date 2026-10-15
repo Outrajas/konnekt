@@ -85,3 +85,11 @@ records and cache files can be removed with `leadforge purge --older-than 30`;
 `leadforge purge --all` requires typing `ERASE ALL LEADFORGE RECORDS`. After
 reviewing a block reason, clear a host pause with `leadforge domains unpause
 <host>`.
+
+## Tier benchmark
+
+Create `data/input/benchmark_domains.txt` with operator-approved domains, one
+per line. Preview policy and budget scope with `python
+scripts/benchmark_tiers.py --domains data/input/benchmark_domains.txt --dry-run`.
+The live benchmark uses the router and may request Tier 2 only when the
+configured Obscura binary exists; review the domain list before running it.

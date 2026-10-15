@@ -119,11 +119,11 @@ class LLMClient:
         start = time.monotonic()
         log.info(
             "LLM request prompt_version=%s system_chars=%d user_chars=%d",
-            prompt_version or "unspecified", len(sys_prompt), len(user),
+            prompt_version or "unspecified",
+            len(sys_prompt),
+            len(user),
         )
-        content = await self._request_json(
-            base_url, api_key, model, messages, temperature
-        )
+        content = await self._request_json(base_url, api_key, model, messages, temperature)
         try:
             return schema.model_validate_json(_strip_fence(content))
         except (ValidationError, ValueError, TypeError) as first_error:
@@ -149,7 +149,9 @@ class LLMClient:
                 ) from repair_error
         log.debug(
             "LLM response prompt_version=%s response_chars=%d latency_seconds=%.3f",
-            prompt_version or "unspecified", len(content), time.monotonic() - start,
+            prompt_version or "unspecified",
+            len(content),
+            time.monotonic() - start,
         )
         return result
 

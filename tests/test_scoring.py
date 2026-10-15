@@ -42,11 +42,14 @@ def candidate(**overrides) -> EmailCandidate:
     ],
 )
 def test_score_uses_spec_weights(overrides, source_count, matches, expected) -> None:
-    assert score(
-        candidate(**overrides),
-        source_count=source_count,
-        pattern_matches_domain=matches,
-    ) == expected
+    assert (
+        score(
+            candidate(**overrides),
+            source_count=source_count,
+            pattern_matches_domain=matches,
+        )
+        == expected
+    )
 
 
 def test_unverified_pattern_only_is_capped_at_point_four() -> None:
