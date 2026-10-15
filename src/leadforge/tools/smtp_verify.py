@@ -91,22 +91,29 @@ def classify(code: int, message: str = "") -> str:
 
 
 async def resolve_mx(
-    domain: str, timeout_seconds: float = 8.0, *, raise_on_error: bool = False
+    domain: str,
+    timeout_seconds: float = 8.0,
+    *,
+    raise_on_error: bool = False,
+    nameservers: list[str] | None = None,
 ) -> list[str]:
     """Return MX hosts; empty means a genuine negative or empty DNS answer.
 
     Resolver failures are deliberately raised so callers cannot confuse a broken
     lookup with a domain that cannot receive mail.
     """
+    del raise_on_error  # Kept for source compatibility; resolver errors always propagate.
+    resolver = dns.asyncresolver.Resolver(configure=True)
+    if nameservers is None:
+        nameservers = Settings().dns_nameservers
+    if nameservers:
+        resolver.nameservers = nameservers
     try:
-        answer = await dns.asyncresolver.resolve(domain, "MX", lifetime=timeout_seconds)
+        answer = await resolver.resolve(domain, "MX", lifetime=timeout_seconds)
     except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
         return []
     except (dns.exception.DNSException, OSError, TimeoutError):
         raise
-    # Retain the old keyword for callers while ensuring it can no longer change
-    # the safety-critical error semantics.
-    del raise_on_error
     records = sorted(answer, key=lambda record: record.preference)
     # RFC 7505 null MX explicitly means this domain does not accept mail.
     if any(str(record.exchange) == "." for record in records):
@@ -218,7 +225,7 @@ async def verify_candidates(
     settings: Settings | None = None,
     *,
     ports: tuple[int, ...] = PORTS,
-    mx_resolver: MxResolver = resolve_mx,
+    mx_resolver: MxResolver | None = None,
     probe_fn: ProbeFn | None = None,
 ) -> list[EmailCandidate]:
     """Verify candidates and return updated copies in the original input order."""
@@ -260,7 +267,12 @@ async def verify_candidates(
             return
 
         try:
-            hosts = await mx_resolver(domain)
+            if mx_resolver is None:
+                hosts = await resolve_mx(
+                    domain, timeout_seconds, nameservers=settings.dns_nameservers
+                )
+            else:
+                hosts = await mx_resolver(domain)
         except Exception as exc:
             log.warning("MX lookup failed for %s: %s", domain, exc)
             for index, candidate in valid:

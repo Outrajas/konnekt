@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     smtp_timeout_seconds: float = 10.0
     smtp_from_address: str = "verify@example.com"
     smtp_max_concurrent: int = 5
+    dns_nameservers: list[str] = Field(default_factory=list)
 
     request_delay_seconds: float = 1.0
     min_confidence_to_emit: float = 0.4
