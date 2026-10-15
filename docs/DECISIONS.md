@@ -23,6 +23,11 @@
 - `EmailCandidate.evidence_tier` records the Phase 11 A/B/C evidence class as an additive field alongside the original spec model; see `SPEC_DELTA.md` §5 entry. Confidence weights remain exactly those in spec §6.
 - Domain pattern learning stores unique Tier-A email samples by domain and address, then keeps the majority pattern in `domain_pattern`; ties preserve the prior winner or use stable pattern ordering. A pattern is established only with two unique samples agreeing on that pattern.
 
+## Bounded person walk
+
+- The `--replay` walk mode uses only an explicit manifest and fixture files, and bypasses LLM and SMTP calls even when live settings exist. This keeps the demo fully offline and makes recorded results reproducible.
+- A public email is attributed to the target only when the validated page extraction associates it with an exact target-name mention, or the deterministic fallback finds the name and a single address in the same text paragraph.
+
 ## Extraction helpers
 
 - `classify_host` accepts an optional `company_domain`, because a URL alone cannot identify whether an otherwise generic host belongs to the company being evaluated. Conference hosts and configured personal-site domains live in `data/host_kinds.toml`.
