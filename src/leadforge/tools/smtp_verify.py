@@ -93,22 +93,24 @@ def classify(code: int, message: str = "") -> str:
 async def resolve_mx(
     domain: str, timeout_seconds: float = 8.0, *, raise_on_error: bool = False
 ) -> list[str]:
-    """Return MX hosts in preference order. Empty means no usable MX records."""
+    """Return MX hosts; empty means a genuine negative or empty DNS answer.
+
+    Resolver failures are deliberately raised so callers cannot confuse a broken
+    lookup with a domain that cannot receive mail.
+    """
     try:
         answer = await dns.asyncresolver.resolve(domain, "MX", lifetime=timeout_seconds)
     except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
         return []
-    except dns.resolver.NoNameservers as exc:
-        if raise_on_error:
-            raise
-        log.warning("MX lookup failed for %s: %s", domain, exc)
-        return []
-    except dns.exception.DNSException as exc:
-        log.warning("MX lookup failed for %s: %s", domain, exc)
-        if raise_on_error:
-            raise
-        return []
+    except (dns.exception.DNSException, OSError, TimeoutError):
+        raise
+    # Retain the old keyword for callers while ensuring it can no longer change
+    # the safety-critical error semantics.
+    del raise_on_error
     records = sorted(answer, key=lambda record: record.preference)
+    # RFC 7505 null MX explicitly means this domain does not accept mail.
+    if any(str(record.exchange) == "." for record in records):
+        return []
     return [host for record in records if (host := str(record.exchange).rstrip("."))]
 
 
@@ -257,7 +259,19 @@ async def verify_candidates(
         if not valid:
             return
 
-        hosts = await mx_resolver(domain)
+        try:
+            hosts = await mx_resolver(domain)
+        except Exception as exc:
+            log.warning("MX lookup failed for %s: %s", domain, exc)
+            for index, candidate in valid:
+                indexed_results[index] = _apply(
+                    candidate,
+                    VerificationVerdict.UNKNOWN,
+                    VerificationMethod.PATTERN_ONLY,
+                    False,
+                    f"dns error: {exc}",
+                )
+            return
         if not hosts:
             for index, candidate in valid:
                 indexed_results[index] = _apply(

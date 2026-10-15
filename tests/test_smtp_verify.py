@@ -19,6 +19,7 @@ from leadforge.tools.smtp_verify import (
     check_port25_status,
     classify,
     is_valid_syntax,
+    resolve_mx,
     verify_candidates,
 )
 
@@ -83,6 +84,78 @@ async def test_no_mx_kills_candidates_without_probing() -> None:
         VerificationVerdict.KILL,
         VerificationVerdict.KILL,
     ]
+
+
+@pytest.mark.asyncio
+async def test_dns_timeout_never_kills_candidate() -> None:
+    async def timed_out(domain: str) -> list[str]:
+        raise dns.exception.Timeout("DNS timed out")
+
+    [result] = await verify_candidates(
+        make_contact(),
+        [make_candidate("jane@example.test", confidence=0.95)],
+        make_settings(),
+        mx_resolver=timed_out,
+    )
+
+    assert result.verification_verdict is VerificationVerdict.UNKNOWN
+    assert result.verification_method is VerificationMethod.PATTERN_ONLY
+    assert result.confidence == 0.4
+    assert "dns error" in result.notes
+
+
+@pytest.mark.asyncio
+async def test_other_resolver_errors_are_unknown_pattern_only() -> None:
+    async def resolver_failure(domain: str) -> list[str]:
+        raise RuntimeError("resolver configuration is broken")
+
+    [result] = await verify_candidates(
+        make_contact(),
+        [make_candidate("jane@example.test")],
+        make_settings(),
+        mx_resolver=resolver_failure,
+    )
+
+    assert result.verification_verdict is VerificationVerdict.UNKNOWN
+    assert result.verification_method is VerificationMethod.PATTERN_ONLY
+    assert result.confidence == 0.4
+    assert "dns error" in result.notes
+
+
+@pytest.mark.asyncio
+async def test_resolve_mx_propagates_nameserver_and_timeout_errors(monkeypatch) -> None:
+    async def fail(*args, **kwargs):
+        raise dns.resolver.NoNameservers
+
+    monkeypatch.setattr("leadforge.tools.smtp_verify.dns.asyncresolver.resolve", fail)
+    with pytest.raises(dns.resolver.NoNameservers):
+        await resolve_mx("example.test")
+
+    async def timeout(*args, **kwargs):
+        raise dns.exception.Timeout("timed out")
+
+    monkeypatch.setattr("leadforge.tools.smtp_verify.dns.asyncresolver.resolve", timeout)
+    with pytest.raises(dns.exception.Timeout):
+        await resolve_mx("example.test")
+
+
+@pytest.mark.asyncio
+async def test_resolve_mx_nxdomain_and_null_mx_are_negative_answers(monkeypatch) -> None:
+    async def nxdomain(*args, **kwargs):
+        raise dns.resolver.NXDOMAIN
+
+    monkeypatch.setattr("leadforge.tools.smtp_verify.dns.asyncresolver.resolve", nxdomain)
+    assert await resolve_mx("missing.example") == []
+
+    class NullRecord:
+        preference = 0
+        exchange = "."
+
+    async def null_mx(*args, **kwargs):
+        return [NullRecord()]
+
+    monkeypatch.setattr("leadforge.tools.smtp_verify.dns.asyncresolver.resolve", null_mx)
+    assert await resolve_mx("nomail.example") == []
 
 
 @pytest.mark.asyncio
