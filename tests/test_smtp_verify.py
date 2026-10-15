@@ -127,14 +127,26 @@ async def test_resolve_mx_propagates_nameserver_and_timeout_errors(monkeypatch) 
     async def fail(*args, **kwargs):
         raise dns.resolver.NoNameservers
 
-    monkeypatch.setattr("leadforge.tools.smtp_verify.dns.asyncresolver.resolve", fail)
+    class FakeResolver:
+        async def resolve(self, *args, **kwargs):
+            return await fail(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "leadforge.tools.smtp_verify.dns.asyncresolver.Resolver", lambda **kwargs: FakeResolver()
+    )
     with pytest.raises(dns.resolver.NoNameservers):
         await resolve_mx("example.test")
 
     async def timeout(*args, **kwargs):
         raise dns.exception.Timeout("timed out")
 
-    monkeypatch.setattr("leadforge.tools.smtp_verify.dns.asyncresolver.resolve", timeout)
+    class TimeoutResolver:
+        async def resolve(self, *args, **kwargs):
+            return await timeout(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "leadforge.tools.smtp_verify.dns.asyncresolver.Resolver", lambda **kwargs: TimeoutResolver()
+    )
     with pytest.raises(dns.exception.Timeout):
         await resolve_mx("example.test")
 
@@ -144,7 +156,13 @@ async def test_resolve_mx_nxdomain_and_null_mx_are_negative_answers(monkeypatch)
     async def nxdomain(*args, **kwargs):
         raise dns.resolver.NXDOMAIN
 
-    monkeypatch.setattr("leadforge.tools.smtp_verify.dns.asyncresolver.resolve", nxdomain)
+    class NXResolver:
+        async def resolve(self, *args, **kwargs):
+            return await nxdomain(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "leadforge.tools.smtp_verify.dns.asyncresolver.Resolver", lambda **kwargs: NXResolver()
+    )
     assert await resolve_mx("missing.example") == []
 
     class NullRecord:
@@ -154,8 +172,36 @@ async def test_resolve_mx_nxdomain_and_null_mx_are_negative_answers(monkeypatch)
     async def null_mx(*args, **kwargs):
         return [NullRecord()]
 
-    monkeypatch.setattr("leadforge.tools.smtp_verify.dns.asyncresolver.resolve", null_mx)
+    class NullResolver:
+        async def resolve(self, *args, **kwargs):
+            return await null_mx(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "leadforge.tools.smtp_verify.dns.asyncresolver.Resolver", lambda **kwargs: NullResolver()
+    )
     assert await resolve_mx("nomail.example") == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_mx_uses_explicit_nameservers(monkeypatch) -> None:
+    class Record:
+        preference = 5
+        exchange = "mx.example.test."
+
+    class AnswerResolver:
+        nameservers = []
+
+        async def resolve(self, *args, **kwargs):
+            return [Record()]
+
+    resolver = AnswerResolver()
+    monkeypatch.setattr(
+        "leadforge.tools.smtp_verify.dns.asyncresolver.Resolver", lambda **kwargs: resolver
+    )
+    assert await resolve_mx("example.test", nameservers=["1.1.1.1"]) == [
+        "mx.example.test"
+    ]
+    assert resolver.nameservers == ["1.1.1.1"]
 
 
 @pytest.mark.asyncio
@@ -334,9 +380,10 @@ async def test_port_25_check_distinguishes_dns_failure_from_tcp_timeout() -> Non
         raise TimeoutError("TCP connect timed out")
 
     assert await check_port25_status(mx_resolver=dns_failure) is Port25Status.DNS_FAILED
-    assert await check_port25_status(
-        mx_resolver=mx, socket_connector=timeout_socket
-    ) is Port25Status.BLOCKED
+    assert (
+        await check_port25_status(mx_resolver=mx, socket_connector=timeout_socket)
+        is Port25Status.BLOCKED
+    )
 
 
 @pytest.mark.asyncio
@@ -347,9 +394,10 @@ async def test_port_25_check_reports_dns_failure_when_no_mx_records_exist() -> N
     async def unexpected_socket(host: str, port: int):
         raise AssertionError("no socket call without MX records")
 
-    assert await check_port25_status(
-        mx_resolver=no_mx, socket_connector=unexpected_socket
-    ) is Port25Status.DNS_FAILED
+    assert (
+        await check_port25_status(mx_resolver=no_mx, socket_connector=unexpected_socket)
+        is Port25Status.DNS_FAILED
+    )
 
 
 class SmtpHandler:

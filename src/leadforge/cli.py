@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
+import dns.resolver
 import typer
 from rich.console import Console
 
@@ -47,6 +48,11 @@ def doctor() -> None:
     console.print(f"[bold]Python:[/] {sys.version.split()[0]}")
     console.print(f"[bold]Data dir:[/] {settings.data_dir.resolve()}")
     console.print(f"[bold]SMTP from:[/] {settings.smtp_from_address}")
+    dns_nameservers = settings.dns_nameservers or dns.resolver.get_default_resolver().nameservers
+    dns_source = "configured" if settings.dns_nameservers else "system"
+    console.print(
+        f"[bold]DNS resolver:[/] {', '.join(map(str, dns_nameservers))} ({dns_source})"
+    )
     console.print(f"[bold]Min confidence:[/] {settings.min_confidence_to_emit}")
     console.print(f"[bold]LLM API key:[/] {'set' if settings.llm_api_key else 'not set'}")
     policy = DomainPolicy.load(settings.domain_policy_path, settings)
