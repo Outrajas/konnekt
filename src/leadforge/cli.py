@@ -12,7 +12,7 @@ from leadforge import __version__
 from leadforge.config import settings
 from leadforge.db import connect, init_schema, schema_version
 from leadforge.models import Contact, EmailCandidate
-from leadforge.tools.smtp_verify import check_port25_reachable, verify_candidates
+from leadforge.tools.smtp_verify import Port25Status, check_port25_status, verify_candidates
 from leadforge.web.denylist import load_denylist
 from leadforge.web.errors import FetchError
 from leadforge.web.fetcher import Fetcher
@@ -63,17 +63,21 @@ def doctor() -> None:
     console.print(f"[bold]Denylist:[/] {denylist_count} hosts")
     _show_platform_budgets()
     try:
-        port25_reachable = asyncio.run(check_port25_reachable(timeout_seconds=5.0))
+        port25_status = asyncio.run(check_port25_status(timeout_seconds=5.0))
     except Exception as exc:
         console.print(f"[bold]Port 25:[/] check failed ({exc})")
     else:
-        state = "reachable" if port25_reachable else "blocked"
-        console.print(f"[bold]Port 25:[/] {state}")
-        if not port25_reachable:
+        console.print(f"[bold]Port 25:[/] {port25_status.value}")
+        if port25_status is Port25Status.DNS_FAILED:
             console.print(
-                "  SMTP verification will return pattern_only until run from a network "
-                "that allows outbound port 25 (e.g. a small VPS)."
+                "  Remedy: Check DNS resolution and network egress, then retry leadforge doctor."
             )
+        elif port25_status is Port25Status.BLOCKED:
+            console.print(
+                "  Remedy: Run SMTP verification on a network that permits outbound port 25."
+            )
+        else:
+            console.print("  Remedy: No action needed; outbound port 25 is reachable.")
     console.print()
 
     console.print("[bold]External tools:[/]")

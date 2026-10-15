@@ -9,6 +9,7 @@ import secrets
 import string
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from enum import Enum
 
 import aiosmtplib
 import dns.asyncresolver
@@ -66,6 +67,12 @@ MxResolver = Callable[[str], Awaitable[list[str]]]
 ProbeFn = Callable[[list[str], str, str, str, float, tuple[int, ...]], Awaitable[Probe]]
 
 
+class Port25Status(str, Enum):  # noqa: UP042 - preserve string-enum behavior
+    DNS_FAILED = "dns resolution failed"
+    BLOCKED = "port 25 blocked (tcp timeout)"
+    REACHABLE = "reachable"
+
+
 def is_valid_syntax(address: str) -> bool:
     return bool(_EMAIL_RE.fullmatch(address))
 
@@ -83,14 +90,23 @@ def classify(code: int, message: str = "") -> str:
     return "unknown"
 
 
-async def resolve_mx(domain: str, timeout_seconds: float = 8.0) -> list[str]:
+async def resolve_mx(
+    domain: str, timeout_seconds: float = 8.0, *, raise_on_error: bool = False
+) -> list[str]:
     """Return MX hosts in preference order. Empty means no usable MX records."""
     try:
         answer = await dns.asyncresolver.resolve(domain, "MX", lifetime=timeout_seconds)
-    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+        return []
+    except dns.resolver.NoNameservers as exc:
+        if raise_on_error:
+            raise
+        log.warning("MX lookup failed for %s: %s", domain, exc)
         return []
     except dns.exception.DNSException as exc:
         log.warning("MX lookup failed for %s: %s", domain, exc)
+        if raise_on_error:
+            raise
         return []
     records = sorted(answer, key=lambda record: record.preference)
     return [host for record in records if (host := str(record.exchange).rstrip("."))]
@@ -154,30 +170,40 @@ async def _probe(
     raise Unreachable(str(last_exc or "no MX hosts configured"))
 
 
-async def check_port25_reachable(
+async def check_port25_status(
     timeout_seconds: float = 5.0,
     *,
     mx_resolver: MxResolver | None = None,
-) -> bool:
-    """Check TCP reachability to a Gmail MX on port 25 without an SMTP probe."""
-    if mx_resolver is None:
-        hosts = await resolve_mx("gmail.com", timeout_seconds=timeout_seconds)
-    else:
-        hosts = await mx_resolver("gmail.com")
+    socket_connector: Callable[..., Awaitable[tuple[object, object]]] | None = None,
+) -> Port25Status:
+    """Distinguish DNS failure from TCP timeout while checking a Gmail MX."""
+    try:
+        if mx_resolver is None:
+            hosts = await resolve_mx(
+                "gmail.com", timeout_seconds=timeout_seconds, raise_on_error=True
+            )
+        else:
+            hosts = await mx_resolver("gmail.com")
+    except (dns.exception.DNSException, OSError, TimeoutError) as exc:
+        log.info("Port 25 diagnostic DNS failure: %s", exc)
+        return Port25Status.DNS_FAILED
+    if not hosts:
+        return Port25Status.DNS_FAILED
+    connector = socket_connector or asyncio.open_connection
     for host in hosts[:MAX_MX_HOSTS]:
         try:
             _, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, 25), timeout=timeout_seconds
+                connector(host, 25), timeout=timeout_seconds
             )
             writer.close()
             try:
                 await asyncio.wait_for(writer.wait_closed(), timeout=timeout_seconds)
             except (OSError, TimeoutError):
                 pass
-            return True
+            return Port25Status.REACHABLE
         except (OSError, TimeoutError):
             continue
-    return False
+    return Port25Status.BLOCKED
 
 
 def _random_local(n: int = 12) -> str:
