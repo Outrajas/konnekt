@@ -1,0 +1,2 @@
+[people]
+query = 'site:linkedin.com/in "{company}" (recruiter OR "talent acquisition" OR "engineering manager")'

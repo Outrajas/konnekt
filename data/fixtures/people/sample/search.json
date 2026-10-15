@@ -1,0 +1,19 @@
+{
+  "hits": [
+    {
+      "title": "Jane Doe - Engineering Manager at Acme | LinkedIn",
+      "url": "https://example.org/people/jane-doe",
+      "snippet": "Jane Doe leads the engineering team at Acme."
+    },
+    {
+      "title": "Jane Doe - Engineering Manager at Acme",
+      "url": "https://example.org/team/jane",
+      "snippet": "Engineering leader at Acme."
+    },
+    {
+      "title": "Riley Chen - Talent Acquisition at Acme",
+      "url": "https://example.org/people/riley-chen",
+      "snippet": "Riley Chen supports hiring at Acme."
+    }
+  ]
+}

@@ -10,6 +10,12 @@ from leadforge.sources.ats import (
 )
 from leadforge.sources.careers import is_js_shell, parse_careers_page
 from leadforge.sources.hn import hiring_comments, parse_hiring_comment
+from leadforge.sources.search import (
+    ReplaySearchProvider,
+    SearxngProvider,
+    dedupe_people,
+    parse_person_snippet,
+)
 from leadforge.stages.matching import match_job
 from leadforge.stages.profile import extract_profile
 
@@ -99,3 +105,38 @@ def test_careers_heading_extraction_and_js_shell_signal() -> None:
         )
         == []
     )
+
+
+async def test_replay_people_search_parses_and_deduplicates_snippets() -> None:
+    provider = ReplaySearchProvider(Path("data/fixtures/people/sample"))
+    hits = await provider.search('site:linkedin.com/in "Acme"')
+    candidates = [item for hit in hits if (item := parse_person_snippet(hit, "Acme"))]
+    candidates = dedupe_people(candidates)
+
+    assert [(item.name, item.title) for item in candidates] == [
+        ("Jane Doe", "Engineering Manager"),
+        ("Riley Chen", "Talent Acquisition"),
+    ]
+    assert all("example.org" in item.url for item in candidates)
+
+
+async def test_searxng_provider_routes_json_fetch_through_injected_router() -> None:
+    class Response:
+        html = (
+            '{"results":[{"title":"Jane Doe - Engineering Manager at Acme",'
+            '"url":"https://example.org/jane","content":"Works at Acme"}]}'
+        )
+
+    class Router:
+        calls = []
+
+        async def fetch(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return Response()
+
+    router = Router()
+    hits = await SearxngProvider("http://searxng.local/", fetcher=router).search("Acme roles")
+
+    assert len(hits) == 1
+    assert hits[0].title.startswith("Jane Doe")
+    assert router.calls[0][1] == {"min_tier": 1, "max_tier": 1, "purpose": "search"}

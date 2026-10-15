@@ -63,3 +63,10 @@ and review `data/profile.json`. Add only operator-approved companies to
 `leadforge discover --companies data/input/companies.csv --dry-run`; a live run
 is refused until the editable profile exists. Use `--include-hn` to add the
 Hacker News hiring thread source.
+
+People search works offline with `leadforge people --company Acme --domain
+acme.example --replay data/fixtures/people/sample`. Live search requires the
+company list, an ingested profile, and `LEADFORGE_SEARXNG_BASE_URL`; only result
+snippets are parsed, and result pages are never fetched. DuckDuckGo support is
+not enabled until a real response snapshot can be recorded after operator input
+is available.

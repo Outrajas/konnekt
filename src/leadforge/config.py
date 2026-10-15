@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     llm_requests_per_minute: int = 10
     llm_daily_cap: int = 100
 
+    searxng_base_url: str | None = None
+
     retention_days: int = 30
 
 

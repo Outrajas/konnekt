@@ -38,3 +38,27 @@ def test_discover_dry_run_only_prints_plan(tmp_path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert "no requests made" in result.output
     assert "acme.example" in result.output
+
+
+def test_people_replay_runs_without_live_operator_inputs(monkeypatch) -> None:
+    class NoNetwork:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("replay must not construct a fetcher")
+
+    monkeypatch.setattr(cli, "Fetcher", NoNetwork)
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "people",
+            "--company",
+            "Acme",
+            "--domain",
+            "acme.example",
+            "--replay",
+            "data/fixtures/people/sample",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Jane Doe" in result.output
+    assert "Riley Chen" in result.output
