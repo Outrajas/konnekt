@@ -23,6 +23,9 @@ data/output/*
 !data/output/.gitkeep
 data/cache/*
 !data/cache/.gitkeep
+*.db
+*.db-journal
+bin/
 
 # Sessions & cookies
 *.session

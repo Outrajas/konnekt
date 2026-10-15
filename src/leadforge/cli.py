@@ -28,6 +28,7 @@ def doctor() -> None:
     console.print(f"[bold]Data dir:[/] {settings.data_dir.resolve()}")
     console.print(f"[bold]SMTP from:[/] {settings.smtp_from_address}")
     console.print(f"[bold]Min confidence:[/] {settings.min_confidence_to_emit}")
+    console.print(f"[bold]LLM API key:[/] {'set' if settings.llm_api_key else 'not set'}")
     console.print()
 
     console.print("[bold]External tools:[/]")
