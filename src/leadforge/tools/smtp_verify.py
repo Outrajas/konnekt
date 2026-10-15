@@ -77,6 +77,20 @@ def is_valid_syntax(address: str) -> bool:
     return bool(_EMAIL_RE.fullmatch(address))
 
 
+def smtp_mail_from_problem(address: str | None) -> str | None:
+    """Return a setup error when MAIL FROM is empty, malformed, or a placeholder."""
+    if not address or not address.strip():
+        return "Set LEADFORGE_SMTP_MAIL_FROM to a real address on a domain you control."
+    if not is_valid_syntax(address):
+        return "LEADFORGE_SMTP_MAIL_FROM must be a valid email address."
+    domain = address.rsplit("@", 1)[-1].lower()
+    if domain in {"yourdomain.com", "example.com", "example.org", "example.net"} or domain.endswith(
+        (".example", ".test")
+    ):
+        return "Replace the placeholder LEADFORGE_SMTP_MAIL_FROM with a real address."
+    return None
+
+
 def classify(code: int, message: str = "") -> str:
     """Map a recipient reply to send, hold, kill, or unknown."""
     if code in (250, 251):
@@ -201,9 +215,7 @@ async def check_port25_status(
     connector = socket_connector or asyncio.open_connection
     for host in hosts[:MAX_MX_HOSTS]:
         try:
-            _, writer = await asyncio.wait_for(
-                connector(host, 25), timeout=timeout_seconds
-            )
+            _, writer = await asyncio.wait_for(connector(host, 25), timeout=timeout_seconds)
             writer.close()
             try:
                 await asyncio.wait_for(writer.wait_closed(), timeout=timeout_seconds)
@@ -232,8 +244,9 @@ async def verify_candidates(
     if settings is None:
         settings = Settings()
     mail_from = settings.smtp_mail_from
-    if not mail_from:
-        raise RuntimeError("Set LEADFORGE_SMTP_MAIL_FROM to an address on your own domain.")
+    mail_from_problem = smtp_mail_from_problem(mail_from)
+    if mail_from_problem:
+        raise RuntimeError(mail_from_problem)
 
     delay = max(0.0, settings.request_delay_seconds)
     max_concurrency = max(1, settings.smtp_max_concurrent)
@@ -250,9 +263,7 @@ async def verify_candidates(
 
     async def run_domain(domain: str, group: list[tuple[int, EmailCandidate]]) -> None:
         valid = [
-            (index, candidate)
-            for index, candidate in group
-            if is_valid_syntax(candidate.email)
+            (index, candidate) for index, candidate in group if is_valid_syntax(candidate.email)
         ]
         for index, candidate in group:
             if not is_valid_syntax(candidate.email):
@@ -310,16 +321,12 @@ async def verify_candidates(
                         if wait > 0:
                             await asyncio.sleep(wait)
                     last_started = loop.time()
-                return await selected_probe(
-                    hosts, address, mail_from, helo, timeout_seconds, ports
-                )
+                return await selected_probe(hosts, address, mail_from, helo, timeout_seconds, ports)
 
         catch_all = False
         try:
             catch_all_probe = await throttled(f"{_random_local()}@{domain}")
-            catch_all = (
-                not catch_all_probe.sender_refused and catch_all_probe.code in (250, 251)
-            )
+            catch_all = not catch_all_probe.sender_refused and catch_all_probe.code in (250, 251)
         except Unreachable as exc:
             note = f"SMTP unreachable on {ports}: {exc}"
             for index, candidate in valid:
