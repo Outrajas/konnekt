@@ -40,3 +40,8 @@
 - ATS response shapes were checked against the public Stripe Greenhouse board, the Lever vendor example board, and Linear's Ashby board. The first guessed Greenhouse and Lever identifiers returned 404, so the recorded snapshots use valid boards. Snapshots retain only a small set of returned records; Ashby email strings were redacted before commit.
 - No operator company list or resume was present in `data/input`; no live company discovery, people search, or resume ingestion was run. Live discovery is gated on both the supplied companies CSV and an editable `data/profile.json` created from the resume.
 - People search has an offline replay provider and a router-backed local SearxNG provider. The DuckDuckGo HTML parser is held until the operator inputs permit a real search-response markup snapshot; no guessed DDG response shape is used.
+
+## Enrichment outputs
+
+- Live discovery, people search, walk, and enrichment require the operator's companies CSV and an ingested resume profile. Replay modes remain offline and do not require a real SMTP identity or LLM key.
+- The sample enrichment fixture demonstrates a published Tier-A address at `.invalid`; it stays below the 0.40 send threshold, so the enriched output shows it as `unknown` and the review file remains empty. Drafts are manual-personalization markers unless professional project evidence exists.

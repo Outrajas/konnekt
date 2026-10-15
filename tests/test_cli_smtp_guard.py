@@ -62,3 +62,26 @@ def test_people_replay_runs_without_live_operator_inputs(monkeypatch) -> None:
     assert result.exit_code == 0
     assert "Jane Doe" in result.output
     assert "Riley Chen" in result.output
+
+
+def test_live_walk_refuses_without_operator_inputs(monkeypatch) -> None:
+    class NoNetwork:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("walk must gate before constructing its fetcher")
+
+    monkeypatch.setattr(cli, "Fetcher", NoNetwork)
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "walk",
+            "--company-domain",
+            "acme.example",
+            "--first",
+            "Jane",
+            "--last",
+            "Doe",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "provide data/input/companies.csv" in result.output

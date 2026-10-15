@@ -3,7 +3,7 @@ import csv
 import shutil
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -19,6 +19,7 @@ from leadforge.llm import LLMNotConfigured, LLMOutputError, chat_json
 from leadforge.llm.prompts import PROMPT_VERSION, SYSTEM_PROMPT
 from leadforge.llm.schemas import PingResponse
 from leadforge.models import Contact, EmailCandidate, OperatorProfile
+from leadforge.scoring import is_sendable
 from leadforge.sources.search import (
     ReplaySearchProvider,
     SearxngProvider,
@@ -34,7 +35,7 @@ from leadforge.stages.discovery import (
     read_companies,
     save_jobs,
 )
-from leadforge.stages.pattern_learn import is_established
+from leadforge.stages.pattern_learn import is_established, record_pattern_sample
 from leadforge.stages.profile import extract_profile, read_resume, save_profile
 from leadforge.stages.replay import ReplayFetcher
 from leadforge.stages.walk import WalkBudget, WalkResult, seed_urls, walk_person
@@ -57,6 +58,8 @@ app = typer.Typer(
 )
 profile_app = typer.Typer(help="Inspect and edit operator profile inputs.")
 app.add_typer(profile_app, name="profile")
+domains_app = typer.Typer(help="Manage host pauses.")
+app.add_typer(domains_app, name="domains")
 console = Console()
 
 
@@ -246,10 +249,11 @@ def discover(
                 f"cap={rule.daily_cap} enabled={rule.enabled}"
             )
         return
-    profile_path = settings.data_dir / "profile.json"
-    if not profile_path.is_file():
-        console.print("[red]Discovery refused:[/] ingest the operator resume first.")
+    _require_operator_inputs()
+    if companies.resolve() != (settings.input_dir / "companies.csv").resolve():
+        console.print("[red]Discovery refused:[/] live runs require data/input/companies.csv.")
         raise typer.Exit(code=2)
+    profile_path = settings.data_dir / "profile.json"
     profile = OperatorProfile.model_validate_json(profile_path.read_text(encoding="utf-8"))
     fetcher = Fetcher(settings)
 
@@ -324,8 +328,11 @@ def _terminal_safe_text(value: str, encoding: str | None = None) -> str:
 
 
 @app.command("llm-ping")
-def llm_ping() -> None:
+def llm_ping(dry_run: bool = typer.Option(False, "--dry-run")) -> None:
     """Check an explicitly configured OpenAI-compatible LLM endpoint."""
+    if dry_run:
+        console.print(f"Would ping model {settings.llm_model or '(unset)'}; no LLM request made")
+        return
     try:
         result = asyncio.run(
             chat_json(
@@ -346,8 +353,16 @@ def llm_ping() -> None:
 
 
 @app.command()
-def verify(csv_path: Path) -> None:
+def verify(
+    csv_path: Path,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
     """Verify candidate addresses from a CSV without sending email."""
+    if dry_run:
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as source:
+            count = sum(1 for _ in csv.DictReader(source))
+        console.print(f"Would check {count} candidate addresses; no SMTP requests made")
+        return
     _require_smtp_mail_from()
     asyncio.run(_verify_csv(csv_path))
 
@@ -397,6 +412,7 @@ def walk_command(
                 "no requests made"
             )
             return
+        _require_operator_inputs()
         fetcher = Fetcher(settings)
 
         async def live_llm(**kwargs):
@@ -470,7 +486,7 @@ def _persist_walk_result(result: WalkResult) -> None:
     try:
         init_schema(conn)
         candidate = result.candidates[0] if result.candidates else None
-        contact = candidate.contact if candidate else None
+        contact = result.contact or (candidate.contact if candidate else None)
         if contact is None:
             return
         company = conn.execute(
@@ -514,6 +530,16 @@ def _persist_walk_result(result: WalkResult) -> None:
                 ).lastrowid
             )
         result.person_id = person_id
+        conn.execute(
+            "INSERT INTO run_log(ts,stage,level,message) VALUES(?,?,?,?)",
+            (
+                now,
+                "enrich",
+                "info",
+                f"person_id={person_id} status={result.status} stop={result.stop_reason} "
+                f"fetches={len(result.pages_visited)}",
+            ),
+        )
         for kind, value, professional in result.evidence:
             conn.execute(
                 """INSERT INTO evidence(person_id,company_id,kind,value,professional,created_at)
@@ -521,6 +547,8 @@ def _persist_walk_result(result: WalkResult) -> None:
                 (person_id, company_id, kind, value, int(professional), now),
             )
         for item in result.candidates:
+            if item.evidence_tier == "A":
+                record_pattern_sample(conn, contact, item)
             conn.execute(
                 """INSERT INTO email_candidate(person_id,email,pattern,source,evidence_tier,
                    found_on_web,catch_all_domain,verification_method,verification_verdict,
@@ -549,6 +577,391 @@ def _persist_walk_result(result: WalkResult) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+@app.command("enrich")
+def enrich(
+    csv_path: Path,
+    force: bool = typer.Option(False, "--force"),
+    max_people: Annotated[int | None, typer.Option("--max-people", min=1)] = None,
+    replay: Annotated[Path | None, typer.Option("--replay", exists=True, file_okay=False)] = None,
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    """Enrich contacts; replay mode is fully offline and bypasses SMTP/LLM."""
+    contacts = _read_contacts(csv_path)
+    if max_people is not None:
+        contacts = contacts[:max_people]
+    if dry_run:
+        console.print(f"Would process {len(contacts)} contacts; no requests made")
+        return
+    if replay is None:
+        _require_smtp_mail_from()
+        _require_operator_inputs()
+    from leadforge.pipeline import run_enrichment
+
+    if replay is not None:
+        replay_fetcher = ReplayFetcher(replay)
+        fetch_fn = replay_fetcher
+
+        async def offline_llm(**kwargs):
+            raise LLMNotConfigured("Replay mode uses deterministic extraction")
+
+        async def offline_verify(candidates):
+            return candidates
+
+        llm_fn, verify_fn = offline_llm, offline_verify
+    else:
+        fetcher = Fetcher(settings)
+
+        async def live_fetch(url: str):
+            return await fetcher.fetch(url)
+
+        async def live_llm(**kwargs):
+            from leadforge.llm.prompts import build_user_message
+            from leadforge.llm.schemas import PageExtraction
+
+            return await chat_json(
+                SYSTEM_PROMPT,
+                build_user_message(
+                    person_name=kwargs["contact"].full_name,
+                    company=kwargs["contact"].company or kwargs["contact"].domain,
+                    role=kwargs["contact"].title or "",
+                    page_text=kwargs["page_text"],
+                    candidate_links=kwargs["candidate_links"],
+                ),
+                PageExtraction,
+                settings=settings,
+                prompt_version=PROMPT_VERSION,
+            )
+
+        async def live_verify(candidates):
+            if not candidates:
+                return candidates
+            return await verify_candidates(candidates[0].contact, candidates, settings)
+
+        fetch_fn, llm_fn, verify_fn = live_fetch, live_llm, live_verify
+
+    results = asyncio.run(
+        run_enrichment(
+            contacts,
+            settings=settings,
+            fetch_fn=fetch_fn,
+            llm_fn=llm_fn,
+            verify_fn=verify_fn,
+            persist_fn=_persist_walk_result,
+            force=force,
+        )
+    )
+    _write_enrichment_outputs(results, settings)
+    console.print(f"Processed {len(results)} contacts; outputs written to {settings.output_dir}")
+
+
+def _read_contacts(csv_path: Path) -> list[Contact]:
+    contacts = []
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as source:
+        for row in csv.DictReader(source):
+            contacts.append(
+                Contact(
+                    first_name=row["first_name"],
+                    last_name=row["last_name"],
+                    domain=row["domain"],
+                    company=row.get("company") or None,
+                    title=row.get("title") or None,
+                    source="csv",
+                )
+            )
+    return contacts
+
+
+def _require_operator_inputs() -> None:
+    if (
+        not (settings.input_dir / "companies.csv").is_file()
+        or not (settings.data_dir / "profile.json").is_file()
+    ):
+        console.print(
+            "[red]Live discovery refused:[/] provide data/input/companies.csv and "
+            "ingest a resume first."
+        )
+        raise typer.Exit(code=2)
+
+
+def _write_enrichment_outputs(results, active_settings) -> None:
+    active_settings.output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    enriched_path = active_settings.output_dir / f"enriched_{timestamp}.csv"
+    fields = [
+        "first_name",
+        "last_name",
+        "company",
+        "domain",
+        "best_email",
+        "evidence_tier",
+        "confidence",
+        "verdict",
+        "catch_all",
+        "sources",
+        "stop_reason",
+        "fetches_used",
+        "provenance",
+    ]
+    with enriched_path.open("w", encoding="utf-8", newline="") as output:
+        writer = csv.DictWriter(output, fieldnames=fields)
+        writer.writeheader()
+        for result in results:
+            best = result.best_email
+            writer.writerow(
+                {
+                    "first_name": result.contact.first_name,
+                    "last_name": result.contact.last_name,
+                    "company": result.contact.company or "",
+                    "domain": result.contact.domain,
+                    "best_email": best.email if best else "",
+                    "evidence_tier": best.evidence_tier if best else "",
+                    "confidence": f"{best.confidence:.2f}" if best else "",
+                    "verdict": best.verification_verdict.value if best else "unknown",
+                    "catch_all": best.catch_all_domain if best else "",
+                    "sources": ";".join(sorted({c.source for c in result.all_candidates})),
+                    "stop_reason": result.stop_reason or "",
+                    "fetches_used": result.fetches_used,
+                    "provenance": ";".join(result.provenance),
+                }
+            )
+    review_path = active_settings.output_dir / "review.csv"
+    review_fields = [
+        "email",
+        "company",
+        "first_name",
+        "last_name",
+        "evidence_tier",
+        "confidence",
+        "provenance",
+        "approved",
+    ]
+    with review_path.open("w", encoding="utf-8", newline="") as output:
+        writer = csv.DictWriter(output, fieldnames=review_fields)
+        writer.writeheader()
+        for result in results:
+            for candidate in result.all_candidates:
+                if is_sendable(candidate, active_settings):
+                    writer.writerow(
+                        {
+                            "email": candidate.email,
+                            "company": result.contact.company or result.contact.domain,
+                            "first_name": result.contact.first_name,
+                            "last_name": result.contact.last_name,
+                            "evidence_tier": candidate.evidence_tier,
+                            "confidence": f"{candidate.confidence:.2f}",
+                            "provenance": ";".join(result.provenance),
+                            "approved": "",
+                        }
+                    )
+    _write_drafts(results, active_settings)
+    console.print(f"Enriched CSV: {enriched_path}")
+    console.print(f"Review CSV: {review_path}")
+
+
+def _write_drafts(results, active_settings) -> int:
+    from leadforge.scoring import is_sendable
+
+    drafts_dir = active_settings.output_dir / "drafts"
+    drafts_dir.mkdir(parents=True, exist_ok=True)
+    count = 0
+    for result in results:
+        for candidate in result.all_candidates:
+            if not is_sendable(candidate, active_settings):
+                continue
+            safe_company = "".join(
+                ch.lower() if ch.isalnum() else "_"
+                for ch in (result.contact.company or result.contact.domain)
+            )
+            safe_last = "".join(
+                ch.lower() if ch.isalnum() else "_" for ch in result.contact.last_name
+            )
+            path = drafts_dir / f"{safe_company}__{safe_last}.md"
+            path.write_text("NEEDS_MANUAL_PERSONALIZATION\n", encoding="utf-8")
+            count += 1
+    return count
+
+
+@app.command("drafts")
+def drafts(dry_run: bool = typer.Option(False, "--dry-run")) -> None:
+    """Write conservative draft placeholders for sendable review rows; never sends."""
+    review_path = settings.output_dir / "review.csv"
+    if not review_path.is_file():
+        console.print("No review.csv exists yet")
+        return
+    with review_path.open("r", encoding="utf-8-sig", newline="") as source:
+        rows = list(csv.DictReader(source))
+    sendable = [row for row in rows if row.get("email")]
+    if dry_run:
+        console.print(f"Would write {len(sendable)} draft placeholders; no files written")
+        return
+    # Review rows contain no professional project evidence, so never invent personalization.
+    target = settings.output_dir / "drafts"
+    target.mkdir(parents=True, exist_ok=True)
+    for row in sendable:
+        company = "".join(ch.lower() if ch.isalnum() else "_" for ch in row["company"])
+        last = "".join(ch.lower() if ch.isalnum() else "_" for ch in row["last_name"])
+        (target / f"{company}__{last}.md").write_text(
+            "NEEDS_MANUAL_PERSONALIZATION\n", encoding="utf-8"
+        )
+    console.print(f"Wrote {len(sendable)} draft placeholders")
+
+
+@app.command("report")
+def report(since: Annotated[int, typer.Option("--since", min=1)] = 30) -> None:
+    """Summarize recent pipeline, source, SMTP, budget, and LLM activity."""
+    cutoff = (datetime.now(UTC) - timedelta(days=since)).isoformat()
+    conn = connect(settings.db_path)
+    try:
+        init_schema(conn)
+        attempted = conn.execute(
+            "SELECT COUNT(*) AS n FROM person WHERE updated_at>=?", (cutoff,)
+        ).fetchone()["n"]
+        statuses = conn.execute(
+            "SELECT status,COUNT(*) AS n FROM person WHERE updated_at>=? GROUP BY status",
+            (cutoff,),
+        ).fetchall()
+        tiers = conn.execute(
+            "SELECT ec.evidence_tier,COUNT(DISTINCT ec.person_id) AS n "
+            "FROM email_candidate ec JOIN person p ON p.id=ec.person_id "
+            "WHERE p.updated_at>=? GROUP BY ec.evidence_tier",
+            (cutoff,),
+        ).fetchall()
+        sources = conn.execute(
+            "SELECT ec.source,COUNT(DISTINCT ec.person_id) AS n FROM email_candidate ec "
+            "JOIN person p ON p.id=ec.person_id WHERE p.updated_at>=? GROUP BY ec.source",
+            (cutoff,),
+        ).fetchall()
+        verdicts = conn.execute(
+            "SELECT verification_verdict,COUNT(*) AS n FROM email_candidate ec "
+            "JOIN person p ON p.id=ec.person_id WHERE p.updated_at>=? "
+            "GROUP BY verification_verdict",
+            (cutoff,),
+        ).fetchall()
+        paused = conn.execute(
+            "SELECT host,paused_until,pause_reason FROM domain_state "
+            "WHERE paused_until IS NOT NULL AND paused_until>? ORDER BY host",
+            (datetime.now(UTC).isoformat(),),
+        ).fetchall()
+        day = datetime.now(UTC).date().isoformat()
+        usage = conn.execute("SELECT count FROM llm_usage WHERE day=?", (day,)).fetchone()
+        fetch_logs = conn.execute(
+            "SELECT message FROM run_log WHERE stage='enrich' AND ts>=?", (cutoff,)
+        ).fetchall()
+    finally:
+        conn.close()
+    status_counts = {row["status"]: int(row["n"]) for row in statuses}
+    tier_counts = {row["evidence_tier"]: int(row["n"]) for row in tiers}
+    found_fetches = []
+    for row in fetch_logs:
+        message = str(row["message"])
+        if "status=found" in message:
+            import re
+
+            match = re.search(r"fetches=(\d+)", message)
+            if match:
+                found_fetches.append(int(match.group(1)))
+    avg_fetches = sum(found_fetches) / len(found_fetches) if found_fetches else 0.0
+    console.print(f"People attempted: {attempted}")
+    console.print(
+        "Found by evidence tier: "
+        + ", ".join(f"{tier}={tier_counts.get(tier, 0)}" for tier in ("A", "B", "C"))
+    )
+    console.print(f"Not found: {status_counts.get('not_found', 0)}")
+    console.print(f"Average fetches per found: {avg_fetches:.2f}")
+    console.print("Per-source yield:")
+    if sources:
+        for row in sources:
+            console.print(f"  {row['source']}: {row['n']}")
+    else:
+        console.print("  none")
+    console.print("SMTP verdict distribution:")
+    if verdicts:
+        for row in verdicts:
+            console.print(f"  {row['verification_verdict']}: {row['n']}")
+    else:
+        console.print("  none")
+    console.print("Blocked/paused domains:")
+    if paused:
+        for row in paused:
+            console.print(f"  {row['host']}: {row['pause_reason']} until {row['paused_until']}")
+    else:
+        console.print("  none")
+    console.print(f"LLM calls used today: {int(usage['count']) if usage else 0}")
+
+
+@domains_app.command("unpause")
+def unpause_domain(host: str) -> None:
+    """Clear a host pause after the operator has reviewed the cause."""
+    conn = connect(settings.db_path)
+    try:
+        cursor = conn.execute(
+            "UPDATE domain_state SET paused_until=NULL,pause_reason=NULL WHERE host=?",
+            (host.lower().rstrip("."),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    console.print(f"Unpaused {host}" if cursor.rowcount else f"No pause recorded for {host}")
+
+
+@app.command("purge")
+def purge(
+    older_than: Annotated[int, typer.Option("--older-than", min=1)] = 30,
+    purge_all: bool = typer.Option(False, "--all"),
+) -> None:
+    """Remove expired local evidence/cache data."""
+    cutoff = (datetime.now(UTC) - timedelta(days=older_than)).isoformat()
+    if purge_all and typer.prompt("Type ERASE ALL LEADFORGE RECORDS to continue") != (
+        "ERASE ALL LEADFORGE RECORDS"
+    ):
+        console.print("Purge cancelled")
+        raise typer.Exit(code=1)
+    conn = connect(settings.db_path)
+    counts: dict[str, int] = {}
+    try:
+        init_schema(conn)
+        if purge_all:
+            for table in ("email_candidate", "evidence", "person", "job", "page", "company"):
+                counts[table] = conn.execute(f"DELETE FROM {table}").rowcount
+        else:
+            counts["email_candidate"] = conn.execute(
+                "DELETE FROM email_candidate WHERE person_id IN "
+                "(SELECT id FROM person WHERE created_at<?)",
+                (cutoff,),
+            ).rowcount
+            counts["evidence"] = conn.execute(
+                "DELETE FROM evidence WHERE created_at<? OR person_id IN "
+                "(SELECT id FROM person WHERE created_at<?)",
+                (cutoff, cutoff),
+            ).rowcount
+            counts["person"] = conn.execute(
+                "DELETE FROM person WHERE created_at<?", (cutoff,)
+            ).rowcount
+            counts["job"] = conn.execute("DELETE FROM job WHERE last_seen<?", (cutoff,)).rowcount
+            counts["page"] = conn.execute(
+                "DELETE FROM page WHERE expires_at<?", (datetime.now(UTC).isoformat(),)
+            ).rowcount
+            counts["company"] = conn.execute(
+                "DELETE FROM company WHERE created_at<? AND NOT EXISTS "
+                "(SELECT 1 FROM person WHERE person.company_id=company.id)",
+                (cutoff,),
+            ).rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    cache_pages = settings.cache_dir / "pages"
+    removed_files = 0
+    if cache_pages.is_dir():
+        cutoff_timestamp = datetime.now(UTC).timestamp() - older_than * 86400
+        for path in cache_pages.rglob("*"):
+            if path.is_file() and (purge_all or path.stat().st_mtime < cutoff_timestamp):
+                path.unlink()
+                removed_files += 1
+    counts["cache_files"] = removed_files
+    for table, count in counts.items():
+        console.print(f"{table}: {count}")
 
 
 def _established_pattern(domain: str) -> str | None:
