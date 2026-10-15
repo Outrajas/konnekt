@@ -167,7 +167,15 @@ def fetch(
     if text:
         from bs4 import BeautifulSoup
         cleaned = " ".join(BeautifulSoup(result.html, "lxml").get_text(" ").split())
-        console.print(cleaned[:500])
+        console.print(_terminal_safe_text(cleaned[:500]))
+
+
+def _terminal_safe_text(value: str, encoding: str | None = None) -> str:
+    """Replace characters the active Windows terminal encoding cannot display."""
+    terminal_encoding = encoding or getattr(sys.stdout, "encoding", None) or "utf-8"
+    return value.encode(terminal_encoding, errors="replace").decode(
+        terminal_encoding, errors="replace"
+    )
 
 
 @app.command("llm-ping")

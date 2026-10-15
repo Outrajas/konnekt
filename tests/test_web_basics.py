@@ -154,6 +154,13 @@ def test_obscura_argv_is_a_list_and_tier_three_stays_disabled() -> None:
         require_allowed(DomainRule(max_tier=2, allow_challenge_solving=False))
 
 
+def test_terminal_safe_text_replaces_unrepresentable_characters() -> None:
+    from leadforge.cli import _terminal_safe_text
+
+    assert _terminal_safe_text("Example 中文", "cp1252") == "Example ??"
+    assert _terminal_safe_text("Résumé", "utf-8") == "Résumé"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status", "body", "path", "expected"),
