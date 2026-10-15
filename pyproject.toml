@@ -2,7 +2,7 @@
 name = "leadforge"
 version = "0.1.0"
 description = "Self-hosted email enrichment pipeline for job-search outreach"
-requires-python = ">=3.11"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
@@ -12,15 +12,24 @@ dependencies = [
     "aiosmtplib>=3.0",
     "dnspython>=2.6",
     "python-dotenv>=1.0",
+    "tldextract>=5.1",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.2",
+    "trafilatura>=1.12",
+    "pypdf>=4.2",
+    "tenacity>=8.2",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
+    "pytest>=8.2",
     "pytest-asyncio>=0.23",
-    "ruff>=0.4",
+    "respx>=0.21",
+    "aiosmtpd>=1.4.6",
+    "ruff>=0.5",
     "mypy>=1.10",
 ]
+fast = ["scrapling[fetchers]>=0.4"]
 
 [project.scripts]
 leadforge = "leadforge.cli:app"
@@ -34,7 +43,12 @@ packages = ["src/leadforge"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q"

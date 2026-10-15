@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
 
-class VerificationMethod(str, Enum):
+class VerificationMethod(str, Enum):  # noqa: UP042 - preserve str(Enum) behavior
     SMTP = "smtp"
     API = "api"
     BROWSER = "browser"
@@ -15,7 +14,7 @@ class VerificationMethod(str, Enum):
     UNVERIFIED = "unverified"
 
 
-class VerificationVerdict(str, Enum):
+class VerificationVerdict(str, Enum):  # noqa: UP042 - preserve str(Enum) behavior
     SEND = "send"
     HOLD = "hold"
     KILL = "kill"
@@ -26,10 +25,10 @@ class Contact(BaseModel):
     first_name: str
     last_name: str
     domain: str
-    company: Optional[str] = None
-    title: Optional[str] = None
-    linkedin_url: Optional[str] = None
-    source: Optional[str] = None
+    company: str | None = None
+    title: str | None = None
+    linkedin_url: str | None = None
+    source: str | None = None
 
     @property
     def full_name(self) -> str:
@@ -39,18 +38,18 @@ class Contact(BaseModel):
 class EmailCandidate(BaseModel):
     email: str
     contact: Contact
-    pattern: Optional[str] = None
+    pattern: str | None = None
     source: str
     found_on_web: bool = False
-    catch_all_domain: Optional[bool] = None
+    catch_all_domain: bool | None = None
     verification_method: VerificationMethod = VerificationMethod.UNVERIFIED
     verification_verdict: VerificationVerdict = VerificationVerdict.UNKNOWN
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)
-    notes: Optional[str] = None
+    notes: str | None = None
 
 
 class EnrichmentResult(BaseModel):
     contact: Contact
-    best_email: Optional[EmailCandidate] = None
+    best_email: EmailCandidate | None = None
     all_candidates: list[EmailCandidate] = Field(default_factory=list)
-    enriched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    enriched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
