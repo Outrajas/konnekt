@@ -107,6 +107,14 @@ def test_tier_a_catch_all_remains_sendable_if_other_rules_pass() -> None:
     assert is_sendable(item, settings)
 
 
+def test_off_mode_only_allows_tier_a_candidates() -> None:
+    settings = Settings(_env_file=None, smtp_verify_mode="off", min_confidence_to_emit=0.4)
+    tier_a = candidate(evidence_tier="A", confidence=0.9)
+    tier_b = candidate(evidence_tier="B", confidence=0.9)
+    assert is_sendable(tier_a, settings)
+    assert not is_sendable(tier_b, settings)
+
+
 def test_killed_candidate_is_never_sendable() -> None:
     item = candidate(
         verification_verdict=VerificationVerdict.KILL,

@@ -50,6 +50,58 @@ class SearxngProvider:
         return hits
 
 
+class DuckDuckGoProvider:
+    """Logged-out Tier 1 HTML search through the policy router."""
+
+    def __init__(self, *, fetcher: Fetcher | None = None) -> None:
+        self.fetcher = fetcher or Fetcher()
+
+    async def search(self, query: str) -> list[SearchHit]:
+        url = "https://html.duckduckgo.com/html/?" + urlencode({"q": query})
+        page = await self.fetcher.fetch(
+            url, min_tier=1, max_tier=1, purpose="search", force_httpx=True
+        )
+        return parse_duckduckgo_results(page.html)
+
+
+def parse_duckduckgo_results(markup: str) -> list[SearchHit]:
+    """Parse the result-card markup, tolerating known class variations."""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(markup, "lxml")
+    results = soup.select(".result, [data-testid='result'], .web-result")
+    hits: list[SearchHit] = []
+    seen: set[str] = set()
+    for result in results:
+        title_node = result.select_one(".result__a, a[data-testid='result-title-a'], h2 a")
+        if title_node is None:
+            continue
+        title = " ".join(title_node.stripped_strings)
+        url = _unwrap_duckduckgo_url(str(title_node.get("href") or ""))
+        snippet_node = result.select_one(
+            ".result__snippet, [data-testid='result-snippet'], .result__extras__snippet"
+        )
+        snippet = " ".join(snippet_node.stripped_strings) if snippet_node else ""
+        if not title or not url or url in seen:
+            continue
+        seen.add(url)
+        hits.append(SearchHit(title=title, url=url, snippet=snippet))
+    if not hits:
+        raise ValueError("unrecognised DuckDuckGo results markup")
+    return hits
+
+
+def _unwrap_duckduckgo_url(value: str) -> str | None:
+    if value.startswith("//"):
+        value = "https:" + value
+    parts = urlsplit(value)
+    if parts.hostname and parts.hostname.endswith("duckduckgo.com"):
+        query = dict(parse_qsl(parts.query))
+        value = query.get("uddg", "")
+    target = urlsplit(value)
+    return value if target.scheme in {"http", "https"} and target.hostname else None
+
+
 class ReplaySearchProvider:
     """Search provider that reads a local fixture only and never accesses the network."""
 

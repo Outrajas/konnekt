@@ -15,6 +15,7 @@ class RawResponse:
     status: int
     headers: dict[str, str]
     body: str
+    backend: str = "unknown"
 
 
 def tier1_backend() -> str:
@@ -58,7 +59,9 @@ async def fetch(
         body = str(response.text)
         if len(body.encode("utf-8", errors="replace")) > MAX_RESPONSE_BYTES:
             raise ValueError("Response exceeded 3 MB limit")
-        return RawResponse(str(response.url), int(response.status), dict(response.headers), body)
+        return RawResponse(
+            str(response.url), int(response.status), dict(response.headers), body, "scrapling"
+        )
     async with httpx.AsyncClient(
         timeout=timeout,
         follow_redirects=True,
@@ -73,5 +76,5 @@ async def fetch(
                     raise ValueError("Response exceeded 3 MB limit")
             body = bytes(chunks).decode(response.encoding or "utf-8", errors="replace")
             return RawResponse(
-                str(response.url), response.status_code, dict(response.headers), body
+                str(response.url), response.status_code, dict(response.headers), body, "httpx"
             )

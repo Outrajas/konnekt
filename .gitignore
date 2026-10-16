@@ -19,8 +19,8 @@ dist/
 # Pipeline data
 data/input/*
 !data/input/.gitkeep
+data/profile.json
 data/output/*
-!data/output/.gitkeep
 data/cache/*
 !data/cache/.gitkeep
 *.db

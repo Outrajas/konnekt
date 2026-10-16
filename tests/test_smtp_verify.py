@@ -41,6 +41,7 @@ def make_candidate(email: str, confidence: float = 0.9) -> EmailCandidate:
 def make_settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
         "_env_file": None,
+        "smtp_verify_mode": "domain",
         "smtp_mail_from": "verify@company.org",
         "smtp_timeout_seconds": 2.0,
         "smtp_max_concurrent": 3,
@@ -412,6 +413,12 @@ class SmtpHandler:
     def __init__(self) -> None:
         self.catch_all = False
         self.data_commands = 0
+        self.mail_from: list[str] = []
+
+    async def handle_MAIL(self, server, session, envelope, address, mail_options):
+        self.mail_from.append(address)
+        envelope.mail_from = address
+        return "250 2.1.0 sender accepted"
 
     async def handle_RCPT(self, server, session, envelope, address, rcpt_options):
         envelope.rcpt_tos.append(address)
@@ -471,3 +478,50 @@ async def test_local_smtp_rcpt_verification_never_sends_data() -> None:
         assert handler.data_commands == 0
     finally:
         controller.stop()
+
+
+@pytest.mark.asyncio
+async def test_null_sender_mode_sends_empty_mail_from_and_never_data() -> None:
+    with socket.socket() as probe_socket:
+        probe_socket.bind(("127.0.0.1", 0))
+        port = probe_socket.getsockname()[1]
+    handler = SmtpHandler()
+    controller = Controller(handler, hostname="127.0.0.1", port=port)
+    controller.start()
+
+    async def local_mx(domain: str) -> list[str]:
+        return ["127.0.0.1"]
+
+    try:
+        [result] = await verify_candidates(
+            make_contact("local.test"),
+            [make_candidate("good@local.test")],
+            make_settings(smtp_verify_mode="null_sender", smtp_mail_from=None),
+            ports=(port,),
+            mx_resolver=local_mx,
+        )
+        assert result.verification_verdict is VerificationVerdict.SEND
+        assert len(handler.mail_from) == 2
+        assert handler.mail_from == ["<>", "<>"]
+        assert handler.data_commands == 0
+    finally:
+        controller.stop()
+
+
+@pytest.mark.asyncio
+async def test_off_mode_skips_dns_and_smtp_probes() -> None:
+    async def unexpected_resolver(domain: str) -> list[str]:
+        raise AssertionError("off mode must not resolve MX records")
+
+    async def unexpected_probe(*args: object) -> Probe:
+        raise AssertionError("off mode must not probe SMTP")
+
+    source = [make_candidate("jane@example.test")]
+    results = await verify_candidates(
+        make_contact(),
+        source,
+        make_settings(smtp_verify_mode="off"),
+        mx_resolver=unexpected_resolver,
+        probe_fn=unexpected_probe,
+    )
+    assert results == source

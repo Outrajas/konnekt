@@ -67,8 +67,11 @@ async def benchmark(
             classification = classify_response(result.status or 0, {}, result.html)
             rows.append(
                 BenchmarkRow(
-                    domain, str(result.tier), classification,
-                    round((time.monotonic() - started) * 1000), "no",
+                    domain,
+                    str(result.tier),
+                    classification,
+                    round((time.monotonic() - started) * 1000),
+                    "no",
                 )
             )
         except Blocked:
@@ -80,8 +83,11 @@ async def benchmark(
         except FetchError as exc:
             rows.append(
                 BenchmarkRow(
-                    domain, "—", type(exc).__name__,
-                    round((time.monotonic() - started) * 1000), "no",
+                    domain,
+                    "—",
+                    type(exc).__name__,
+                    round((time.monotonic() - started) * 1000),
+                    "no",
                 )
             )
     return rows
@@ -89,9 +95,7 @@ async def benchmark(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--domains", type=Path, default=Path("data/input/benchmark_domains.txt")
-    )
+    parser.add_argument("--domains", type=Path, default=Path("data/input/benchmark_domains.txt"))
     parser.add_argument("--dry-run", action="store_true", help="print the plan without requests")
     parser.add_argument("--path", choices=("team", "about"), default="team")
     args = parser.parse_args()

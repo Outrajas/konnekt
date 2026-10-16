@@ -234,7 +234,7 @@ async def test_router_challenge_pauses_without_escalation(tmp_path, monkeypatch)
     )
     seen_tiers: list[int] = []
 
-    async def fake_http(url, settings):
+    async def fake_http(url, settings, **_kwargs):
         seen_tiers.append(1)
         return RawResponse(url, 200, {"cf-mitigated": "challenge"}, "<p>Checking browser</p>")
 
@@ -245,6 +245,85 @@ async def test_router_challenge_pauses_without_escalation(tmp_path, monkeypatch)
     assert seen_tiers == [1]
     with pytest.raises(DomainPaused):
         await router.fetch("https://example.test/", use_cache=False)
+
+
+@pytest.mark.asyncio
+async def test_router_retries_empty_scrapling_response_with_httpx(tmp_path, monkeypatch) -> None:
+    from leadforge.web import fetcher as fetcher_module
+    from leadforge.web.tiers.http import RawResponse
+
+    policy_path = tmp_path / "policy.toml"
+    policy_path.write_text(
+        "[default]\nenabled=true\nmin_delay_s=0\nmax_delay_s=0\ndaily_cap=10\n"
+        "max_tier=1\nobey_robots=false\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "fallback.db"
+    conn = connect(db_path)
+    init_schema(conn)
+    conn.close()
+    settings = Settings(
+        _env_file=None,
+        db_path=db_path,
+        cache_dir=tmp_path / "cache",
+        domain_policy_path=policy_path,
+        denylist_hosts_path=tmp_path / "denylist.txt",
+    )
+    calls = []
+
+    async def fake_http(url, _settings, *, use_httpx=False):
+        calls.append(use_httpx)
+        return RawResponse(
+            url,
+            200,
+            {},
+            "<p>Recovered body</p>" if use_httpx else "",
+            "httpx" if use_httpx else "scrapling",
+        )
+
+    monkeypatch.setattr(fetcher_module.http, "fetch", fake_http)
+    result = await fetcher_module.Fetcher(settings).fetch(
+        "https://example.test/about", use_cache=False
+    )
+    assert calls == [False, True]
+    assert result.html == "<p>Recovered body</p>"
+
+
+@pytest.mark.asyncio
+async def test_router_retries_empty_scrapling_robots_response_with_httpx(
+    tmp_path, monkeypatch
+) -> None:
+    from leadforge.web import fetcher as fetcher_module
+    from leadforge.web.tiers.http import RawResponse
+
+    policy_path = tmp_path / "policy.toml"
+    policy_path.write_text(
+        "[default]\nenabled=true\nmin_delay_s=0\nmax_delay_s=0\ndaily_cap=10\n"
+        "max_tier=1\nobey_robots=true\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "robots-fallback.db"
+    conn = connect(db_path)
+    init_schema(conn)
+    conn.close()
+    settings = Settings(
+        _env_file=None,
+        db_path=db_path,
+        cache_dir=tmp_path / "cache",
+        domain_policy_path=policy_path,
+        denylist_hosts_path=tmp_path / "denylist.txt",
+    )
+    calls = []
+
+    async def fake_http(url, _settings, *, use_httpx=False):
+        calls.append(use_httpx)
+        body = "User-agent: *\nAllow: /\n" if use_httpx else ""
+        return RawResponse(url, 200, {}, body, "httpx" if use_httpx else "scrapling")
+
+    monkeypatch.setattr(fetcher_module.http, "fetch", fake_http)
+    router = fetcher_module.Fetcher(settings)
+    assert await router.robots.allowed("https://example.test/team")
+    assert calls == [False, True]
 
 
 @pytest.mark.asyncio
@@ -340,7 +419,7 @@ async def test_platform_fetch_purpose_guards(
     )
     calls: list[str] = []
 
-    async def fake_http(url, settings):
+    async def fake_http(url, settings, **_kwargs):
         calls.append(url)
         return RawResponse(url, 200, {}, "<p>ok</p>")
 

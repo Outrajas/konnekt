@@ -39,7 +39,8 @@
 
 - ATS response shapes were checked against the public Stripe Greenhouse board, the Lever vendor example board, and Linear's Ashby board. The first guessed Greenhouse and Lever identifiers returned 404, so the recorded snapshots use valid boards. Snapshots retain only a small set of returned records; Ashby email strings were redacted before commit.
 - No operator company list or resume was present in `data/input`; no live company discovery, people search, or resume ingestion was run. Live discovery is gated on both the supplied companies CSV and an editable `data/profile.json` created from the resume.
-- People search has an offline replay provider and a router-backed local SearxNG provider. The DuckDuckGo HTML parser is held until the operator inputs permit a real search-response markup snapshot; no guessed DDG response shape is used.
+- People search has offline replay, router-backed SearxNG, and a logged-out DuckDuckGo HTML adapter. The DDG parser is based on the single approved `Stripe engineering blog` response snapshot; result URLs are never fetched.
+- The manual saved-page importer is fully offline, deterministic, and limited to professional fields. Ambiguous or changed markup is reported as unrecognised rather than guessed.
 
 ## Enrichment outputs
 

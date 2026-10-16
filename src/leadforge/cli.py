@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.table import Table
 
 from leadforge import __version__
-from leadforge.config import settings
+from leadforge.config import setting_env_name, settings
 from leadforge.db import connect, init_schema, schema_version
 from leadforge.llm import LLMNotConfigured, LLMOutputError, chat_json
 from leadforge.llm.prompts import PROMPT_VERSION, SYSTEM_PROMPT
@@ -21,6 +21,7 @@ from leadforge.llm.schemas import PingResponse
 from leadforge.models import Contact, EmailCandidate, OperatorProfile
 from leadforge.scoring import is_sendable
 from leadforge.sources.search import (
+    DuckDuckGoProvider,
     ReplaySearchProvider,
     SearchProvider,
     SearxngProvider,
@@ -36,6 +37,7 @@ from leadforge.stages.discovery import (
     read_companies,
     save_jobs,
 )
+from leadforge.stages.import_pages import parse_saved_page, persist_import, saved_page_paths
 from leadforge.stages.pattern_learn import is_established, record_pattern_sample
 from leadforge.stages.profile import extract_profile, read_resume, save_profile
 from leadforge.stages.replay import ReplayFetcher
@@ -76,26 +78,34 @@ def doctor() -> None:
     """Check Python, dependencies, and external tool availability."""
     console.print(f"[bold]Python:[/] {sys.version.split()[0]}")
     console.print(f"[bold]Data dir:[/] {settings.data_dir.resolve()}")
-    console.print(f"[bold]SMTP MAIL FROM:[/] {settings.smtp_mail_from or '(empty)'}")
-    console.print(f"[bold]Legacy SMTP from:[/] {settings.smtp_from_address}")
-    mail_from_problem = smtp_mail_from_problem(settings.smtp_mail_from)
-    if mail_from_problem:
-        console.print(f"[bold yellow]Warning:[/] {mail_from_problem}")
-    if settings.smtp_from_address == "verify@yourdomain.com":
-        console.print(
-            "[bold yellow]Warning:[/] Legacy SMTP from is still the sample placeholder; "
-            "set LEADFORGE_SMTP_MAIL_FROM for verification."
-        )
+    console.print(f"[bold]SMTP verify mode:[/] {settings.smtp_verify_mode}")
+    mail_from_name = setting_env_name("smtp_mail_from")
+    console.print(f"[bold]SMTP MAIL FROM variable:[/] {mail_from_name or '(not set)'}")
+    if settings.smtp_verify_mode == "domain":
+        mail_from_problem = smtp_mail_from_problem(settings.smtp_mail_from)
+        if mail_from_problem:
+            console.print(f"[bold yellow]Warning:[/] {mail_from_problem}")
     dns_nameservers = settings.dns_nameservers or dns.resolver.get_default_resolver().nameservers
     dns_source = "configured" if settings.dns_nameservers else "system"
-    console.print(f"[bold]DNS resolver:[/] {', '.join(map(str, dns_nameservers))} ({dns_source})")
+    dns_names = setting_env_name("dns_nameservers")
+    console.print(
+        f"[bold]DNS resolver (as seen from this process):[/] "
+        f"{', '.join(map(str, dns_nameservers))} ({dns_source}; "
+        f"variable={dns_names or '(not set)'})"
+    )
     console.print(f"[bold]Min confidence:[/] {settings.min_confidence_to_emit}")
-    console.print(f"[bold]LLM API key:[/] {'set' if settings.llm_api_key else 'not set'}")
+    for field_name, label in (
+        ("llm_base_url", "LLM base URL variable"),
+        ("llm_api_key", "LLM API key variable"),
+        ("llm_model", "LLM model variable"),
+        ("obscura_path", "Obscura path variable"),
+    ):
+        console.print(f"[bold]{label}:[/] {setting_env_name(field_name) or '(not set)'}")
     policy = DomainPolicy.load(settings.domain_policy_path, settings)
     console.print(f"[bold]Tier 1 backend:[/] {tier1_backend()}")
     obscura = settings.obscura_path
     if obscura and obscura.is_file():
-        console.print(f"[bold]Obscura:[/] {_obscura_version(obscura)} ({obscura})")
+        console.print(f"[bold]Obscura:[/] {_obscura_version(obscura)} (configured)")
         console.print("[bold]Tier 2:[/] enabled")
     else:
         bundled_obscura = Path("bin/obscura/obscura.exe")
@@ -123,10 +133,13 @@ def doctor() -> None:
     try:
         port25_status = asyncio.run(check_port25_status(timeout_seconds=5.0))
     except Exception as exc:
-        console.print(f"[bold]Port 25:[/] check failed ({exc})")
+        console.print(f"[bold]Port 25 (as seen from this process):[/] check failed ({exc})")
     else:
-        console.print(f"[bold]Port 25:[/] {port25_status.value}")
+        console.print(f"[bold]Port 25 (as seen from this process):[/] {port25_status.value}")
         if port25_status is Port25Status.DNS_FAILED:
+            console.print(
+                f"  Resolver in use: {', '.join(map(str, dns_nameservers))} ({dns_source})"
+            )
             console.print(
                 "  Remedy: Check DNS resolution and network egress, then retry leadforge doctor."
             )
@@ -224,6 +237,35 @@ def fetch(
         console.print(_terminal_safe_text(cleaned[:500]))
 
 
+@app.command("import-pages")
+def import_pages(
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    delete_after: bool = typer.Option(False, "--delete-after"),
+) -> None:
+    """Import operator-saved HTML/MHTML/text pages without making network calls."""
+    directory = settings.input_dir / "saved_pages"
+    pages = [parse_saved_page(path) for path in saved_page_paths(directory)]
+    if not pages:
+        console.print(f"No saved pages found in {directory}")
+        return
+    recognized = [page for page in pages if page.status == "recognized"]
+    for page in pages:
+        console.print(f"{page.path.name}: {page.kind} — {page.status}")
+        for field_name, value in page.evidence:
+            console.print(f"  {field_name}: {value}")
+    if dry_run:
+        console.print(
+            f"Would import {len(recognized)} of {len(pages)} saved pages; "
+            "no files or records changed"
+        )
+        return
+    for page in recognized:
+        persist_import(page, settings)
+        if delete_after:
+            page.path.unlink()
+    console.print(f"Imported {len(recognized)} of {len(pages)} saved pages")
+
+
 @profile_app.command("ingest")
 def profile_ingest(resume: Path) -> None:
     """Extract a deterministic, editable profile from a resume document."""
@@ -241,9 +283,12 @@ def discover(
     companies: Annotated[Path, typer.Option(..., "--companies", exists=True, dir_okay=False)],
     dry_run: bool = typer.Option(False, "--dry-run"),
     include_hn: bool = typer.Option(False, "--include-hn"),
+    limit: Annotated[int | None, typer.Option("--limit", min=1)] = None,
 ) -> None:
     """Find public jobs for operator-supplied companies; dry-run makes no requests."""
     company_rows = read_companies(companies)
+    if limit is not None:
+        company_rows = company_rows[:limit]
     if dry_run:
         console.print("Discovery plan (no requests made):")
         for item in plan_discovery(company_rows, settings):
@@ -310,13 +355,12 @@ def people(
                 "and ingest a resume first."
             )
             raise typer.Exit(code=2)
-        if not settings.searxng_base_url:
-            console.print(
-                "[red]Live people search unavailable:[/] configure SearxNG or provide "
-                "the required DuckDuckGo markup snapshot first."
-            )
-            raise typer.Exit(code=2)
-        provider = SearxngProvider(settings.searxng_base_url, fetcher=Fetcher(settings))
+        fetcher = Fetcher(settings)
+        provider = (
+            SearxngProvider(settings.searxng_base_url, fetcher=fetcher)
+            if settings.searxng_base_url
+            else DuckDuckGoProvider(fetcher=fetcher)
+        )
     hits = asyncio.run(provider.search(query))
     candidates = dedupe_people(
         [candidate for hit in hits if (candidate := parse_person_snippet(hit, company))]
@@ -377,6 +421,8 @@ def verify(
 
 
 def _require_smtp_mail_from() -> None:
+    if settings.smtp_verify_mode != "domain":
+        return
     problem = smtp_mail_from_problem(settings.smtp_mail_from)
     if problem:
         console.print(f"[red]SMTP checks refused:[/] {problem}")
