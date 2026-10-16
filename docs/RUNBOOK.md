@@ -50,10 +50,12 @@ Replay mode reads only the fixture manifest and HTML files. It makes no HTTP, LL
 `leadforge llm-ping` sends one small JSON request to the configured OpenAI-compatible endpoint. It prints `LLM not configured` and exits successfully when the three LLM settings are missing. The automated tests use fake HTTP responses; do not run the ping until the operator authorizes a live smoke test.
 # SMTP verification setup
 
-Before running `leadforge verify` or `leadforge enrich`, set
-`LEADFORGE_SMTP_MAIL_FROM` to a valid address at a domain the operator controls.
-The verifier uses this value only for the SMTP `MAIL FROM` command; it never
-sends message data. An empty value or the sample placeholder is refused.
+`LEADFORGE_SMTP_VERIFY_MODE` accepts `off` (default), `null_sender`, or `domain`.
+`off` makes no SMTP recipient probes and only Tier A candidates can be sendable.
+`null_sender` probes with the SMTP null sender (`MAIL FROM:<>`). `domain` uses
+`SMTP_MAIL_FROM` or `LEADFORGE_SMTP_MAIL_FROM`, which must be a real address at
+a domain the operator controls. A refused MAIL FROM is `unknown`; no mode sends
+message data.
 
 ## Discovery inputs
 
@@ -66,14 +68,27 @@ Hacker News hiring thread source.
 
 People search works offline with `leadforge people --company Acme --domain
 acme.example --replay data/fixtures/people/sample`. Live search requires the
-company list, an ingested profile, and `LEADFORGE_SEARXNG_BASE_URL`; only result
-snippets are parsed, and result pages are never fetched. DuckDuckGo support is
-not enabled until a real response snapshot can be recorded after operator input
-is available.
+company list, an ingested profile, and an explicitly configured provider; only
+result snippets are parsed, and result pages are never fetched.
+
+## Manual research workflow
+
+Browse manually while logged out, then use the browser's **Ctrl+S** to save
+LinkedIn profile or people-search results, Indeed/Glassdoor job pages, Glassdoor
+company pages, or company pages into `data/input/saved_pages/`. Run
+`leadforge import-pages --dry-run` to preview recognized work fields, then
+`leadforge import-pages` to save those fields as local people, jobs, and
+professional evidence. Add `--delete-after` to remove recognized source files
+after import. The importer does not fetch pages or make network calls. Continue
+with `leadforge people` and `leadforge enrich` after the operator's company list
+and resume profile are present. Changed or ambiguous markup is reported as
+unrecognised. The library has an optional injected local-model fallback for
+ambiguous fields with Phase 10 cross-checks; the CLI does not contact a remote
+LLM so the offline guarantee remains true.
 
 ## Replay, review, and maintenance
 
-Run the local demo with `leadforge enrich data/input/sample_contacts.csv
+Run the local demo with `leadforge enrich tests/fixtures/sample_contacts.csv
 --replay data/fixtures/sample --force`, then inspect the enriched CSV and
 `data/output/review.csv`. The review file includes only sendable candidates and
 leaves `approved` empty. `leadforge drafts --dry-run` previews draft count;

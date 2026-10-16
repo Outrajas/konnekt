@@ -30,4 +30,4 @@ async def fetch(
     if process.returncode != 0 or not stdout:
         detail = stderr.decode("utf-8", errors="replace")[:500]
         raise FetchFailed(f"Obscura failed with exit {process.returncode}: {detail}")
-    return RawResponse(url, 200, {}, stdout.decode("utf-8", errors="replace"))
+    return RawResponse(url, 200, {}, stdout.decode("utf-8", errors="replace"), "obscura")

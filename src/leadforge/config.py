@@ -1,7 +1,12 @@
+import os
 from pathlib import Path
+from types import MethodType
+from typing import Literal
 
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_SETTING_ENV_NAMES: dict[str, str] = {}
 
 
 class Settings(BaseSettings):
@@ -11,6 +16,7 @@ class Settings(BaseSettings):
         env_prefix="LEADFORGE_",
         env_ignore_empty=True,
         extra="ignore",
+        populate_by_name=True,
     )
 
     data_dir: Path = Path("data")
@@ -21,12 +27,18 @@ class Settings(BaseSettings):
     domain_policy_path: Path = Path("data/domain_policy.toml")
     denylist_hosts_path: Path = Path("data/denylist_hosts.txt")
 
-    smtp_mail_from: str | None = None
+    smtp_mail_from: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SMTP_MAIL_FROM", "LEADFORGE_SMTP_MAIL_FROM"),
+    )
+    smtp_verify_mode: Literal["off", "null_sender", "domain"] = "off"
     smtp_timeout: float = 10.0
     smtp_timeout_seconds: float = 10.0
-    smtp_from_address: str = "verify@example.com"
     smtp_max_concurrent: int = 5
-    dns_nameservers: list[str] = Field(default_factory=list)
+    dns_nameservers: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("DNS_NAMESERVERS", "LEADFORGE_DNS_NAMESERVERS"),
+    )
 
     request_delay_seconds: float = 1.0
     min_confidence_to_emit: float = 0.4
@@ -51,20 +63,100 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("OBSCURA_PATH", "LEADFORGE_OBSCURA_PATH"),
     )
-    obscura_stealth: bool = True
-    obscura_timeout_seconds: int = 30
+    obscura_stealth: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("OBSCURA_STEALTH", "LEADFORGE_OBSCURA_STEALTH"),
+    )
+    obscura_timeout_seconds: int = Field(
+        default=30,
+        validation_alias=AliasChoices(
+            "OBSCURA_TIMEOUT_SECONDS", "LEADFORGE_OBSCURA_TIMEOUT_SECONDS"
+        ),
+    )
 
-    llm_base_url: str | None = None
-    llm_api_key: SecretStr | None = None
-    llm_model: str | None = None
-    llm_max_input_chars: int = 12_000
-    llm_timeout_seconds: float = 60.0
-    llm_requests_per_minute: int = 10
-    llm_daily_cap: int = 100
+    llm_base_url: str | None = Field(
+        default=None, validation_alias=AliasChoices("LLM_BASE_URL", "LEADFORGE_LLM_BASE_URL")
+    )
+    llm_api_key: SecretStr | None = Field(
+        default=None, validation_alias=AliasChoices("LLM_API_KEY", "LEADFORGE_LLM_API_KEY")
+    )
+    llm_model: str | None = Field(
+        default=None, validation_alias=AliasChoices("LLM_MODEL", "LEADFORGE_LLM_MODEL")
+    )
+    llm_max_input_chars: int = Field(
+        default=12_000,
+        validation_alias=AliasChoices("LLM_MAX_INPUT_CHARS", "LEADFORGE_LLM_MAX_INPUT_CHARS"),
+    )
+    llm_timeout_seconds: float = Field(
+        default=60.0,
+        validation_alias=AliasChoices("LLM_TIMEOUT_SECONDS", "LEADFORGE_LLM_TIMEOUT_SECONDS"),
+    )
+    llm_requests_per_minute: int = Field(
+        default=10,
+        validation_alias=AliasChoices(
+            "LLM_REQUESTS_PER_MINUTE", "LEADFORGE_LLM_REQUESTS_PER_MINUTE"
+        ),
+    )
+    llm_daily_cap: int = Field(
+        default=100,
+        validation_alias=AliasChoices("LLM_DAILY_CAP", "LEADFORGE_LLM_DAILY_CAP"),
+    )
 
     searxng_base_url: str | None = None
 
     retention_days: int = 30
+
+    @classmethod
+    def settings_customise_sources(
+        cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings
+    ):
+        """Track the selected environment variable name without retaining or displaying values."""
+        for source in (env_settings, dotenv_settings):
+            original = source.get_field_value
+
+            def tracked(self, field, field_name, _original=original):
+                value, key, complex_value = _original(field, field_name)
+                if field_name in {
+                    "smtp_mail_from",
+                    "dns_nameservers",
+                    "obscura_path",
+                    "obscura_stealth",
+                    "obscura_timeout_seconds",
+                    "llm_base_url",
+                    "llm_api_key",
+                    "llm_model",
+                    "llm_max_input_chars",
+                    "llm_timeout_seconds",
+                    "llm_requests_per_minute",
+                    "llm_daily_cap",
+                }:
+                    for _field_key, env_name, _is_complex in self._extract_field_info(
+                        field, field_name
+                    ):
+                        prefix = str(self.config.get("env_prefix") or "")
+                        candidates = [env_name]
+                        if prefix and not env_name.upper().startswith(prefix.upper()):
+                            candidates.append(prefix + env_name)
+                        available = {name.upper() for name in self.env_vars}
+                        available.update(name.upper() for name in os.environ)
+                        found_name = next(
+                            (name.upper() for name in candidates if name.upper() in available),
+                            None,
+                        )
+                        if found_name:
+                            _SETTING_ENV_NAMES.setdefault(field_name, found_name)
+                            break
+                    if value is not None:
+                        _SETTING_ENV_NAMES.setdefault(field_name, str(key).upper())
+                return value, key, complex_value
+
+            source.get_field_value = MethodType(tracked, source)
+        return init_settings, env_settings, dotenv_settings, file_secret_settings
+
+
+def setting_env_name(field_name: str) -> str | None:
+    """Return only the selected setting variable's name, never its value."""
+    return _SETTING_ENV_NAMES.get(field_name)
 
 
 settings = Settings()

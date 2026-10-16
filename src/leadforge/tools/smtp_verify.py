@@ -87,14 +87,17 @@ def is_valid_syntax(address: str) -> bool:
 def smtp_mail_from_problem(address: str | None) -> str | None:
     """Return a setup error when MAIL FROM is empty, malformed, or a placeholder."""
     if not address or not address.strip():
-        return "Set LEADFORGE_SMTP_MAIL_FROM to a real address on a domain you control."
+        return (
+            "Set SMTP_MAIL_FROM or LEADFORGE_SMTP_MAIL_FROM to a real address "
+            "on a domain you control."
+        )
     if not is_valid_syntax(address):
-        return "LEADFORGE_SMTP_MAIL_FROM must be a valid email address."
+        return "SMTP_MAIL_FROM must be a valid email address."
     domain = address.rsplit("@", 1)[-1].lower()
     if domain in {"yourdomain.com", "example.com", "example.org", "example.net"} or domain.endswith(
         (".example", ".test")
     ):
-        return "Replace the placeholder LEADFORGE_SMTP_MAIL_FROM with a real address."
+        return "Replace the placeholder SMTP_MAIL_FROM with a real address."
     return None
 
 
@@ -250,16 +253,23 @@ async def verify_candidates(
     """Verify candidates and return updated copies in the original input order."""
     if settings is None:
         settings = Settings()
-    mail_from = settings.smtp_mail_from
-    mail_from_problem = smtp_mail_from_problem(mail_from)
-    if mail_from_problem:
-        raise RuntimeError(mail_from_problem)
-    assert mail_from is not None
+    if settings.smtp_verify_mode == "off":
+        return [candidate.model_copy(deep=True) for candidate in candidates]
+    mail_from: str
+    if settings.smtp_verify_mode == "null_sender":
+        mail_from = ""
+    else:
+        configured_sender = settings.smtp_mail_from
+        mail_from_problem = smtp_mail_from_problem(configured_sender)
+        if mail_from_problem:
+            raise RuntimeError(mail_from_problem)
+        assert configured_sender is not None
+        mail_from = configured_sender
 
     delay = max(0.0, settings.request_delay_seconds)
     max_concurrency = max(1, settings.smtp_max_concurrent)
     timeout_seconds = settings.smtp_timeout_seconds
-    helo = mail_from.split("@", 1)[-1]
+    helo = mail_from.split("@", 1)[-1] if mail_from else "localhost"
     selected_probe = probe_fn or _probe
 
     by_domain: dict[str, list[tuple[int, EmailCandidate]]] = {}

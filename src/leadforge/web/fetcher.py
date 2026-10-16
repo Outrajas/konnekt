@@ -34,12 +34,24 @@ class Fetcher:
         self.budget = Budget(str(self.settings.db_path))
         self.cache = PageCache(self.settings)
         self.robots = RobotsChecker(self.settings.user_agent, self.settings.http_timeout_seconds)
-        self.robots.request_fn = lambda robots_url: http.fetch(robots_url, self.settings)
+        self.robots.request_fn = self._fetch_robots
         self.robots.before_request = lambda robots_host: self.budget.acquire(
             self.policy.budget_key(robots_host), self.policy.resolve(robots_host)
         )
         self.robots.cache_get = self.cache.get
         self.robots.cache_put = self.cache.put
+
+    async def _fetch_robots(self, robots_url: str) -> http.RawResponse:
+        response = await http.fetch(robots_url, self.settings)
+        if (
+            response.backend == "scrapling"
+            and 200 <= response.status < 300
+            and not response.body.strip()
+        ):
+            host = urlsplit(robots_url).hostname or ""
+            await self.budget.acquire(self.policy.budget_key(host), self.policy.resolve(host))
+            response = await http.fetch(robots_url, self.settings, use_httpx=True)
+        return response
 
     async def fetch(
         self,
@@ -49,6 +61,8 @@ class Fetcher:
         max_tier: int | None = None,
         use_cache: bool = True,
         purpose: str = "",
+        force_httpx: bool = False,
+        retry_errors: bool = True,
     ) -> FetchResult:
         normalized = normalize_url(url)
         parts = urlsplit(normalized)
@@ -86,15 +100,28 @@ class Fetcher:
         while True:
             await self.budget.acquire(budget_host, rule)
             try:
-                response = await self._fetch_tier(tier, normalized, rule)
+                response = await self._fetch_tier(tier, normalized, rule, force_httpx=force_httpx)
+                if (
+                    tier == 1
+                    and response.backend == "scrapling"
+                    and 200 <= response.status < 300
+                    and not response.body.strip()
+                ):
+                    # The fallback is a second routed attempt and consumes a second budget slot.
+                    await self.budget.acquire(budget_host, rule)
+                    response = await http.fetch(normalized, self.settings, use_httpx=True)
             except (TimeoutError, OSError, httpx.HTTPError) as exc:
+                if not retry_errors:
+                    raise FetchFailed(f"Fetch failed for {host}: {exc}") from exc
                 # One bounded retry; each attempt acquires budget independently.
                 if getattr(exc, "_leadforge_retried", False):
                     raise FetchFailed(f"Fetch failed for {host}: {exc}") from exc
                 try:
                     await asyncio.sleep(0.25)
                     await self.budget.acquire(budget_host, rule)
-                    response = await self._fetch_tier(tier, normalized, rule)
+                    response = await self._fetch_tier(
+                        tier, normalized, rule, force_httpx=force_httpx
+                    )
                 except Exception as retry_exc:
                     raise FetchFailed(f"Fetch failed for {host}: {retry_exc}") from retry_exc
             classification = classify_response(response.status, response.headers, response.body)
@@ -128,7 +155,9 @@ class Fetcher:
                 raise FetchFailed(f"Thin response from {host}; no permitted rendering tier")
             raise FetchFailed(f"Unexpected response from {host}: {response.status}")
 
-    async def _fetch_tier(self, tier: int, url: str, rule: DomainRule) -> http.RawResponse:
+    async def _fetch_tier(
+        self, tier: int, url: str, rule: DomainRule, *, force_httpx: bool = False
+    ) -> http.RawResponse:
         if tier == 1:
             host = urlsplit(url).hostname or ""
             api_hosts = {
@@ -140,7 +169,7 @@ class Fetcher:
             }
             if host in api_hosts:
                 return await http.fetch(url, self.settings, use_httpx=True)
-            return await http.fetch(url, self.settings)
+            return await http.fetch(url, self.settings, use_httpx=force_httpx)
         if tier == 2:
             return await obscura.fetch(
                 url,

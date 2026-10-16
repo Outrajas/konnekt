@@ -1,11 +1,13 @@
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from leadforge import cli
 
 
 def test_verify_refuses_before_opening_csv_without_real_mail_from(monkeypatch) -> None:
+    monkeypatch.setattr(cli.settings, "smtp_verify_mode", "domain")
     monkeypatch.setattr(cli.settings, "smtp_mail_from", "verify@yourdomain.com")
 
     result = CliRunner().invoke(cli.app, ["verify", "missing.csv"])
@@ -16,6 +18,7 @@ def test_verify_refuses_before_opening_csv_without_real_mail_from(monkeypatch) -
 
 
 def test_verify_refuses_empty_mail_from_before_opening_csv(monkeypatch) -> None:
+    monkeypatch.setattr(cli.settings, "smtp_verify_mode", "domain")
     monkeypatch.setattr(cli.settings, "smtp_mail_from", None)
 
     result = CliRunner().invoke(cli.app, ["verify", str(Path("missing.csv"))])
@@ -38,6 +41,21 @@ def test_discover_dry_run_only_prints_plan(tmp_path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert "no requests made" in result.output
     assert "acme.example" in result.output
+
+
+def test_discover_limit_selects_first_companies_for_preview(tmp_path) -> None:
+    companies = tmp_path / "companies.csv"
+    companies.write_text(
+        "name,domain\nFirst,first.example\nSecond,second.example\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(
+        cli.app,
+        ["discover", "--companies", str(companies), "--limit", "1", "--dry-run"],
+    )
+    assert result.exit_code == 0
+    assert "first.example" in result.output
+    assert "second.example" not in result.output
 
 
 def test_people_replay_runs_without_live_operator_inputs(monkeypatch) -> None:
@@ -87,17 +105,35 @@ def test_live_walk_refuses_without_operator_inputs(monkeypatch) -> None:
     assert "provide data/input/companies.csv" in result.output
 
 
-def test_doctor_warns_on_empty_mail_from_and_legacy_placeholder(monkeypatch) -> None:
+def test_doctor_warns_on_empty_mail_from_only_in_domain_mode(monkeypatch) -> None:
     async def reachable_port25(**_kwargs):
         return cli.Port25Status.REACHABLE
 
+    monkeypatch.setattr(cli.settings, "smtp_verify_mode", "domain")
     monkeypatch.setattr(cli.settings, "smtp_mail_from", None)
-    monkeypatch.setattr(cli.settings, "smtp_from_address", "verify@yourdomain.com")
     monkeypatch.setattr(cli, "check_port25_status", reachable_port25)
 
     result = CliRunner().invoke(cli.app, ["doctor"])
 
     assert result.exit_code == 0
-    assert "SMTP MAIL FROM: (empty)" in result.output
-    assert "Legacy SMTP from: verify@yourdomain.com" in result.output
-    assert "LEADFORGE_SMTP_MAIL_FROM" in result.output
+    assert "SMTP verify mode: domain" in result.output
+    assert "Warning:" in result.output
+    assert "SMTP MAIL FROM variable:" in result.output
+    assert "as seen from this process" in result.output
+
+
+@pytest.mark.parametrize("mode", ["off", "null_sender"])
+def test_doctor_suppresses_sender_warning_and_never_prints_setting_values(
+    monkeypatch, mode
+) -> None:
+    async def reachable_port25(**_kwargs):
+        return cli.Port25Status.REACHABLE
+
+    monkeypatch.setattr(cli.settings, "smtp_verify_mode", mode)
+    monkeypatch.setattr(cli.settings, "smtp_mail_from", "private-sender-value@example.invalid")
+    monkeypatch.setattr(cli, "check_port25_status", reachable_port25)
+    result = CliRunner().invoke(cli.app, ["doctor"])
+    assert result.exit_code == 0
+    assert f"SMTP verify mode: {mode}" in result.output
+    assert "private-sender-value" not in result.output
+    assert "Warning:" not in result.output

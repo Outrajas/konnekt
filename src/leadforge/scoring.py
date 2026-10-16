@@ -61,6 +61,7 @@ def is_sendable(candidate: EmailCandidate, settings: Settings) -> bool:
     return (
         candidate.confidence >= settings.min_confidence_to_emit
         and tier in {"A", "B"}
+        and (settings.smtp_verify_mode != "off" or tier == "A")
         and candidate.verification_verdict is not VerificationVerdict.KILL
         and not (candidate.catch_all_domain is True and tier != "A")
     )
