@@ -119,6 +119,29 @@ MIGRATIONS = [
         PRIMARY KEY(domain, email)
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS outreach (
+        id INTEGER PRIMARY KEY,
+        person_id INTEGER NOT NULL REFERENCES person(id),
+        email TEXT NOT NULL,
+        sent_at TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        outcome TEXT NOT NULL DEFAULT 'none'
+            CHECK (outcome IN ('none','reply','bounce','auto_reply','opt_out')),
+        follow_up_due TEXT,
+        notes TEXT,
+        UNIQUE(person_id, email)
+    );
+    CREATE INDEX IF NOT EXISTS outreach_sent_at_idx ON outreach(sent_at);
+
+    CREATE TABLE IF NOT EXISTS suppression (
+        id INTEGER PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('email','domain')),
+        value TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(kind, value)
+    );
+    """,
 ]
 
 

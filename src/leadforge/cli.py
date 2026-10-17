@@ -1,5 +1,9 @@
 import asyncio
 import csv
+import functools
+import json
+import os
+import sqlite3
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -12,12 +16,14 @@ from rich.console import Console
 from rich.table import Table
 
 from leadforge import __version__
-from leadforge.config import setting_env_name, settings
+from leadforge.config import setting_env_name, setting_env_names, settings
 from leadforge.db import connect, init_schema, schema_version
+from leadforge.draft_quality import quality_issues
 from leadforge.llm import LLMNotConfigured, LLMOutputError, chat_json
 from leadforge.llm.prompts import PROMPT_VERSION, SYSTEM_PROMPT
 from leadforge.llm.schemas import PingResponse
 from leadforge.models import Contact, EmailCandidate, OperatorProfile
+from leadforge.outreach import daily_cap, is_suppressed_or_contacted, sent_today
 from leadforge.scoring import is_sendable
 from leadforge.sources.search import (
     DuckDuckGoProvider,
@@ -101,6 +107,33 @@ def doctor() -> None:
         ("obscura_path", "Obscura path variable"),
     ):
         console.print(f"[bold]{label}:[/] {setting_env_name(field_name) or '(not set)'}")
+    for field_name in (
+        "smtp_mail_from",
+        "dns_nameservers",
+        "obscura_path",
+        "obscura_stealth",
+        "obscura_timeout_seconds",
+        "llm_base_url",
+        "llm_api_key",
+        "llm_model",
+        "llm_max_input_chars",
+        "llm_timeout_seconds",
+        "llm_requests_per_minute",
+        "llm_daily_cap",
+    ):
+        names = setting_env_names(field_name)
+        legacy = [name for name in names if not name.startswith("LEADFORGE_")]
+        preferred = [name for name in names if name.startswith("LEADFORGE_")]
+        if legacy:
+            console.print(
+                f"[bold yellow]Warning:[/] legacy environment variable name supplied: "
+                f"{', '.join(legacy)}"
+            )
+        if legacy and preferred:
+            console.print(
+                f"[bold yellow]Warning:[/] both legacy and prefixed names are set for "
+                f"{field_name}: {', '.join((*legacy, *preferred))}"
+            )
     policy = DomainPolicy.load(settings.domain_policy_path, settings)
     console.print(f"[bold]Tier 1 backend:[/] {tier1_backend()}")
     obscura = settings.obscura_path
@@ -233,6 +266,13 @@ def import_pages(
 ) -> None:
     """Import operator-saved HTML/MHTML/text pages without making network calls."""
     directory = settings.input_dir / "saved_pages"
+    if dry_run:
+        replay_settings = _replay_settings(settings)
+        replay_db = connect(replay_settings.db_path)
+        try:
+            init_schema(replay_db)
+        finally:
+            replay_db.close()
     pages = [parse_saved_page(path) for path in saved_page_paths(directory)]
     if not pages:
         console.print(f"No saved pages found in {directory}")
@@ -333,6 +373,7 @@ def people(
         console.print(f"Would search {host} for: {query}; no request made")
         return
     provider: SearchProvider
+    active_settings = _replay_settings(settings) if replay is not None else settings
     if replay is not None:
         provider = ReplaySearchProvider(replay)
     else:
@@ -354,11 +395,78 @@ def people(
     candidates = dedupe_people(
         [candidate for hit in hits if (candidate := parse_person_snippet(hit, company))]
     )[:max_people]
+    _persist_people(candidates, company, domain, active_settings)
     table = Table("Name", "Title", "Company", "Source URL")
     for candidate in candidates:
         table.add_row(candidate.name, candidate.title, candidate.company, candidate.url)
     console.print(table)
     console.print(f"People candidates: {len(candidates)}")
+
+
+def _persist_people(candidates, company: str, domain: str, active_settings) -> None:
+    if not candidates:
+        return
+    now = datetime.now(UTC).isoformat()
+    conn = connect(active_settings.db_path)
+    try:
+        init_schema(conn)
+        company_row = conn.execute(
+            "SELECT id FROM company WHERE lower(domain)=lower(?)", (domain,)
+        ).fetchone()
+        if company_row:
+            company_id = int(company_row["id"])
+        else:
+            cursor = conn.execute(
+                "INSERT INTO company(name,domain,source,created_at) VALUES(?,?,?,?)",
+                (company, domain.lower(), "people_search", now),
+            )
+            if cursor.lastrowid is None:
+                raise RuntimeError("company insert did not return an id")
+            company_id = cursor.lastrowid
+        for candidate in candidates:
+            parts = candidate.name.strip().split()
+            if len(parts) < 2:
+                continue
+            first, last = parts[0], " ".join(parts[1:])
+            person = conn.execute(
+                "SELECT id FROM person WHERE company_id=? AND lower(first_name)=lower(?) "
+                "AND lower(last_name)=lower(?) ORDER BY id LIMIT 1",
+                (company_id, first, last),
+            ).fetchone()
+            if person:
+                person_id = int(person["id"])
+                conn.execute(
+                    "UPDATE person SET title=?,updated_at=? WHERE id=?",
+                    (candidate.title, now, person_id),
+                )
+            else:
+                cursor = conn.execute(
+                    "INSERT INTO person(company_id,first_name,last_name,title,status,"
+                    "created_at,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?)",
+                    (company_id, first, last, candidate.title, "new", now, now),
+                )
+                if cursor.lastrowid is None:
+                    raise RuntimeError("person insert did not return an id")
+                person_id = cursor.lastrowid
+            if candidate.snippet:
+                conn.execute(
+                    "INSERT INTO evidence(person_id,company_id,kind,value,professional,created_at) "
+                    "SELECT ?,?,?,?,1,? WHERE NOT EXISTS (SELECT 1 FROM evidence WHERE "
+                    "person_id=? AND kind='search_snippet' AND value=?)",
+                    (
+                        person_id,
+                        company_id,
+                        "search_snippet",
+                        candidate.snippet,
+                        now,
+                        person_id,
+                        candidate.snippet,
+                    ),
+                )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _terminal_safe_text(value: str, encoding: str | None = None) -> str:
@@ -504,7 +612,10 @@ def walk_command(
                 ),
                 seed_urls_override=starts,
                 denylist_hosts=load_denylist(settings.denylist_hosts_path),
-                persist_fn=_persist_walk_result,
+                persist_fn=functools.partial(
+                    _persist_walk_result,
+                    active_settings=_replay_settings(settings) if replay is not None else settings,
+                ),
                 min_confidence_to_emit=settings.min_confidence_to_emit,
                 established_pattern=(
                     None if replay is not None else _established_pattern(company_domain)
@@ -525,10 +636,16 @@ def walk_command(
         )
 
 
-def _persist_walk_result(result: WalkResult) -> None:
+def _replay_settings(active_settings):
+    """Return settings bound to the replay-only database."""
+    return active_settings.model_copy(update={"db_path": active_settings.cache_dir / "replay.db"})
+
+
+def _persist_walk_result(result: WalkResult, active_settings=None) -> None:
     """Upsert the person state and persist candidate/evidence provenance locally."""
+    active_settings = active_settings or settings
     now = datetime.now(UTC).isoformat()
-    conn = connect(settings.db_path)
+    conn = connect(active_settings.db_path)
     try:
         init_schema(conn)
         candidate = result.candidates[0] if result.candidates else None
@@ -642,6 +759,7 @@ def enrich(
     if dry_run:
         console.print(f"Would process {len(contacts)} contacts; no requests made")
         return
+    active_settings = _replay_settings(settings) if replay is not None else settings
     if replay is None:
         _require_smtp_mail_from()
         _require_operator_inputs()
@@ -692,16 +810,152 @@ def enrich(
     results = asyncio.run(
         run_enrichment(
             contacts,
-            settings=settings,
+            settings=active_settings,
             fetch_fn=fetch_operation,
             llm_fn=llm_fn,
             verify_fn=verify_fn,
-            persist_fn=_persist_walk_result,
+            persist_fn=functools.partial(_persist_walk_result, active_settings=active_settings),
             force=force,
         )
     )
-    _write_enrichment_outputs(results, settings)
+    _write_enrichment_outputs(results, active_settings)
     console.print(f"Processed {len(results)} contacts; outputs written to {settings.output_dir}")
+
+
+@app.command("run-daily")
+def run_daily(dry_run: bool = typer.Option(False, "--dry-run")) -> None:
+    """Run the capped discover, people, enrich, and report stages with a resumable lock."""
+    companies_path = settings.input_dir / "companies.csv"
+    profile_path = settings.data_dir / "profile.json"
+    if not companies_path.is_file() or not profile_path.is_file():
+        console.print("run-daily requires data/input/companies.csv and data/profile.json")
+        raise typer.Exit(code=2)
+    companies = read_companies(companies_path)
+    if dry_run:
+        console.print("run-daily plan (no network requests):")
+        for instruction in plan_discovery(companies, settings):
+            console.print(f"  {instruction}")
+        console.print("  people: up to 3 per company within host budgets")
+        console.print(
+            f"  enrich: at most {min(20, _outreach_cap())} people with configured walk budgets"
+        )
+        console.print("  report")
+        return
+
+    lock_path = settings.cache_dir / "run-daily.lock"
+    try:
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        console.print("run-daily is already running (lock file exists)")
+        raise typer.Exit(code=2) from None
+    os.write(descriptor, f"pid={os.getpid()}\n".encode("ascii"))
+    os.close(descriptor)
+    state_path = settings.cache_dir / "run-daily-state.json"
+    today_key = datetime.now(UTC).date().isoformat()
+    try:
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            state = {}
+        if state.get("date") != today_key:
+            state = {"date": today_key, "completed": []}
+        completed = set(state.get("completed", []))
+
+        def finish_stage(name: str) -> None:
+            completed.add(name)
+            temporary = state_path.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps({"date": today_key, "completed": sorted(completed)}),
+                encoding="utf-8",
+            )
+            temporary.replace(state_path)
+
+        try:
+            if "discover" not in completed:
+                discover(companies_path, dry_run=False, include_hn=True, limit=None)
+                finish_stage("discover")
+            if "people" not in completed:
+                for company_row in companies:
+                    people(
+                        company_row.name,
+                        company_row.domain,
+                        max_people=3,
+                        replay=None,
+                        dry_run=False,
+                    )
+                finish_stage("people")
+            if "enrich" not in completed:
+                contacts_path = _daily_contacts_csv(settings, companies)
+                if contacts_path is not None:
+                    enrich(
+                        contacts_path,
+                        force=False,
+                        max_people=min(20, _outreach_cap()),
+                        replay=None,
+                        dry_run=False,
+                    )
+                finish_stage("enrich")
+            if "report" not in completed:
+                report(since=30)
+                finish_stage("report")
+        except Exception as exc:
+            from leadforge.web.errors import FetchError
+
+            if isinstance(exc, FetchError):
+                console.print(f"run-daily stopped on policy/fetch failure: {type(exc).__name__}")
+            else:
+                console.print(
+                    f"run-daily stage failed: {type(exc).__name__}; completed stages are saved"
+                )
+            raise typer.Exit(code=1) from None
+    finally:
+        lock_path.unlink(missing_ok=True)
+
+
+def _outreach_cap() -> int:
+    conn = connect(settings.db_path)
+    try:
+        init_schema(conn)
+        return daily_cap(conn)
+    finally:
+        conn.close()
+
+
+def _daily_contacts_csv(active_settings, companies) -> Path | None:
+    domains = [item.domain.lower() for item in companies]
+    if not domains:
+        return None
+    placeholders = ",".join("?" for _ in domains)
+    conn = connect(active_settings.db_path)
+    try:
+        init_schema(conn)
+        rows = conn.execute(
+            f"SELECT p.first_name,p.last_name,p.title,c.name,c.domain FROM person p "
+            f"JOIN company c ON c.id=p.company_id WHERE lower(c.domain) IN ({placeholders}) "
+            "AND p.first_name IS NOT NULL AND p.last_name IS NOT NULL ORDER BY p.id",
+            domains,
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    path = active_settings.cache_dir / "run-daily-contacts.csv"
+    with path.open("w", encoding="utf-8", newline="") as output:
+        writer = csv.DictWriter(
+            output, fieldnames=["first_name", "last_name", "domain", "company", "title"]
+        )
+        writer.writeheader()
+        writer.writerows(
+            {
+                "first_name": row["first_name"],
+                "last_name": row["last_name"],
+                "domain": row["domain"],
+                "company": row["name"],
+                "title": row["title"] or "",
+            }
+            for row in rows
+        )
+    return path
 
 
 def _read_contacts(csv_path: Path) -> list[Contact]:
@@ -734,6 +988,7 @@ def _require_operator_inputs() -> None:
 
 
 def _write_enrichment_outputs(results, active_settings) -> None:
+    draft_checks = _write_drafts(results, active_settings)
     active_settings.output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     enriched_path = active_settings.output_dir / f"enriched_{timestamp}.csv"
@@ -784,13 +1039,18 @@ def _write_enrichment_outputs(results, active_settings) -> None:
         "confidence",
         "provenance",
         "approved",
+        "draft_quality",
+        "draft_issues",
     ]
     with review_path.open("w", encoding="utf-8", newline="") as output:
         writer = csv.DictWriter(output, fieldnames=review_fields)
         writer.writeheader()
         for result in results:
             for candidate in result.all_candidates:
-                if is_sendable(candidate, active_settings):
+                if is_sendable(candidate, active_settings) and not _candidate_blocked(
+                    candidate, result.contact, active_settings
+                ):
+                    issues = draft_checks.get(candidate.email, ["NEEDS_MANUAL_PERSONALIZATION"])
                     writer.writerow(
                         {
                             "email": candidate.email,
@@ -801,6 +1061,8 @@ def _write_enrichment_outputs(results, active_settings) -> None:
                             "confidence": f"{candidate.confidence:.2f}",
                             "provenance": ";".join(result.provenance),
                             "approved": "",
+                            "draft_quality": "pass" if not issues else "fail",
+                            "draft_issues": "; ".join(issues),
                         }
                     )
     _write_drafts(results, active_settings)
@@ -808,15 +1070,15 @@ def _write_enrichment_outputs(results, active_settings) -> None:
     console.print(f"Review CSV: {review_path}")
 
 
-def _write_drafts(results, active_settings) -> int:
-    from leadforge.scoring import is_sendable
-
+def _write_drafts(results, active_settings) -> dict[str, list[str]]:
     drafts_dir = active_settings.output_dir / "drafts"
     drafts_dir.mkdir(parents=True, exist_ok=True)
-    count = 0
+    checks: dict[str, list[str]] = {}
     for result in results:
         for candidate in result.all_candidates:
-            if not is_sendable(candidate, active_settings):
+            if not is_sendable(candidate, active_settings) or _candidate_blocked(
+                candidate, result.contact, active_settings
+            ):
                 continue
             safe_company = "".join(
                 ch.lower() if ch.isalnum() else "_"
@@ -826,13 +1088,79 @@ def _write_drafts(results, active_settings) -> int:
                 ch.lower() if ch.isalnum() else "_" for ch in result.contact.last_name
             )
             path = drafts_dir / f"{safe_company}__{safe_last}.md"
-            path.write_text("NEEDS_MANUAL_PERSONALIZATION\n", encoding="utf-8")
-            count += 1
-    return count
+            evidence = _draft_evidence(result.contact, active_settings, result.provenance)
+            draft = _compose_draft(result.contact, candidate.email, evidence)
+            path.write_text(draft, encoding="utf-8")
+            checks[candidate.email] = quality_issues(draft)
+    return checks
+
+
+def _candidate_blocked(candidate: EmailCandidate, contact: Contact, active_settings) -> bool:
+    conn = connect(active_settings.db_path)
+    try:
+        init_schema(conn)
+        return is_suppressed_or_contacted(
+            conn,
+            candidate.email,
+            first_name=contact.first_name,
+            last_name=contact.last_name,
+            domain=contact.domain,
+        )
+    finally:
+        conn.close()
+
+
+def _draft_evidence(contact: Contact, active_settings, provenance: list[str]):
+    conn = connect(active_settings.db_path)
+    try:
+        init_schema(conn)
+        row = conn.execute(
+            "SELECT e.kind,e.value,pg.url FROM evidence e "
+            "JOIN person p ON p.id=e.person_id JOIN company c ON c.id=p.company_id "
+            "LEFT JOIN page pg ON pg.id=e.page_id WHERE e.professional=1 "
+            "AND lower(p.first_name)=lower(?) AND lower(p.last_name)=lower(?) "
+            "AND lower(c.domain)=lower(?) ORDER BY e.created_at DESC LIMIT 1",
+            (contact.first_name, contact.last_name, contact.domain),
+        ).fetchone()
+        if row is None:
+            return None
+        url = row["url"]
+        if not url and len(provenance) == 1:
+            url = provenance[0]
+        return (str(row["kind"]), str(row["value"]), str(url)) if url else None
+    finally:
+        conn.close()
+
+
+def _compose_draft(contact: Contact, email: str, evidence) -> str:
+    if not evidence:
+        return "NEEDS_MANUAL_PERSONALIZATION\n"
+    kind, value, url = evidence
+    if not url.startswith(("https://", "http://")):
+        return "NEEDS_MANUAL_PERSONALIZATION\n"
+    company = contact.company or contact.domain
+    detail = " ".join(value.split())[:220]
+    return (
+        f"Subject: Quick question about work at {company}\n\n"
+        f"Hi {contact.first_name},\n\n"
+        f'I found your professional {kind.replace("_", " ")} about "{detail}" '
+        f"([source]({url})). That concrete detail helped me understand part of the work "
+        f"happening at {company}.\n\n"
+        "I'm exploring opportunities where I could contribute my experience and am trying "
+        "to learn how early-career candidates should approach teams like yours. I'll keep "
+        "this brief, and I can share a concise background summary if useful.\n\n"
+        "Would you be open to a brief conversation about how early-career candidates can "
+        "best approach your team?\n\n"
+        'If you prefer no further messages, reply "opt out" and I won\'t follow up.\n\n'
+        "Best,\nYour name\n"
+    )
 
 
 @app.command("drafts")
-def drafts(dry_run: bool = typer.Option(False, "--dry-run")) -> None:
+def drafts(
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    check_only: bool = typer.Option(False, "--check"),
+) -> None:
     """Write conservative draft placeholders for sendable review rows; never sends."""
     review_path = settings.output_dir / "review.csv"
     if not review_path.is_file():
@@ -847,13 +1175,65 @@ def drafts(dry_run: bool = typer.Option(False, "--dry-run")) -> None:
     # Review rows contain no professional project evidence, so never invent personalization.
     target = settings.output_dir / "drafts"
     target.mkdir(parents=True, exist_ok=True)
-    for row in sendable:
+    if not check_only:
+        for row in sendable:
+            company = "".join(ch.lower() if ch.isalnum() else "_" for ch in row["company"])
+            last = "".join(ch.lower() if ch.isalnum() else "_" for ch in row["last_name"])
+            path = target / f"{company}__{last}.md"
+            if not path.exists():
+                path.write_text("NEEDS_MANUAL_PERSONALIZATION\n", encoding="utf-8")
+    issues = _refresh_review_quality(review_path, target)
+    verb = "Checked" if check_only else "Wrote or checked"
+    console.print(f"{verb} {len(sendable)} drafts; {issues} need manual personalization or repair")
+
+
+def _refresh_review_quality(review_path: Path, drafts_dir: Path) -> int:
+    if not review_path.is_file():
+        return 0
+    with review_path.open("r", encoding="utf-8-sig", newline="") as source:
+        reader = csv.DictReader(source)
+        rows = list(reader)
+        fields = list(reader.fieldnames or [])
+    for field in ("draft_quality", "draft_issues"):
+        if field not in fields:
+            fields.append(field)
+    failing = 0
+    conn = connect(settings.db_path)
+    init_schema(conn)
+    retained = []
+    for row in rows:
         company = "".join(ch.lower() if ch.isalnum() else "_" for ch in row["company"])
         last = "".join(ch.lower() if ch.isalnum() else "_" for ch in row["last_name"])
-        (target / f"{company}__{last}.md").write_text(
-            "NEEDS_MANUAL_PERSONALIZATION\n", encoding="utf-8"
+        if is_suppressed_or_contacted(
+            conn,
+            row["email"],
+            first_name=row["first_name"],
+            last_name=row["last_name"],
+            company=row["company"],
+        ):
+            continue
+        draft_path = drafts_dir / f"{company}__{last}.md"
+        text = (
+            draft_path.read_text(encoding="utf-8")
+            if draft_path.exists()
+            else "NEEDS_MANUAL_PERSONALIZATION\n"
         )
-    console.print(f"Wrote {len(sendable)} draft placeholders")
+        issues = quality_issues(text)
+        row["draft_quality"] = "pass" if not issues else "fail"
+        row["draft_issues"] = "; ".join(issues)
+        failing += bool(issues)
+        retained.append(row)
+    conn.close()
+    rows = retained
+    with review_path.open("w", encoding="utf-8", newline="") as output:
+        writer = csv.DictWriter(output, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    return failing
+
+
+def _refresh_existing_review() -> None:
+    _refresh_review_quality(settings.output_dir / "review.csv", settings.output_dir / "drafts")
 
 
 @app.command("report")
@@ -897,6 +1277,14 @@ def report(since: Annotated[int, typer.Option("--since", min=1)] = 30) -> None:
         fetch_logs = conn.execute(
             "SELECT message FROM run_log WHERE stage='enrich' AND ts>=?", (cutoff,)
         ).fetchall()
+        outreach_rates = conn.execute(
+            "SELECT ec.evidence_tier,ec.source,COUNT(*) AS sent,"
+            "SUM(o.outcome='reply') AS replies,SUM(o.outcome='bounce') AS bounces "
+            "FROM outreach o JOIN email_candidate ec ON ec.person_id=o.person_id "
+            "AND lower(ec.email)=lower(o.email) WHERE o.sent_at>=? "
+            "GROUP BY ec.evidence_tier,ec.source ORDER BY ec.evidence_tier,ec.source",
+            (cutoff,),
+        ).fetchall()
     finally:
         conn.close()
     status_counts = {row["status"]: int(row["n"]) for row in statuses}
@@ -937,6 +1325,22 @@ def report(since: Annotated[int, typer.Option("--since", min=1)] = 30) -> None:
     else:
         console.print("  none")
     console.print(f"LLM calls used today: {int(usage['count']) if usage else 0}")
+    console.print("Outreach reply/bounce rates by evidence tier and source:")
+    if outreach_rates:
+        for row in outreach_rates:
+            sent = int(row["sent"])
+            replies = int(row["replies"] or 0)
+            bounces = int(row["bounces"] or 0)
+            bounce_rate = bounces / sent if sent else 0.0
+            console.print(
+                f"  tier={row['evidence_tier']} source={row['source']}: sent={sent}, "
+                f"replies={replies} ({replies / sent:.1%}), bounces={bounces} "
+                f"({bounce_rate:.1%})"
+            )
+            if bounce_rate >= 0.03:
+                console.print("  [bold red]Bounce alert: rate is at or above 3%[/]")
+    else:
+        console.print("  none")
 
 
 @domains_app.command("unpause")
@@ -1073,6 +1477,192 @@ def init_db() -> None:
         )
     finally:
         conn.close()
+
+
+def _backup_database() -> Path:
+    source_path = Path(settings.db_path)
+    source = connect(source_path)
+    try:
+        init_schema(source)
+        backup_dir = settings.data_dir / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        target_path = backup_dir / f"leadforge_{stamp}.db"
+        target = sqlite3.connect(str(target_path))
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+        return target_path
+    finally:
+        source.close()
+
+
+@app.command("backup")
+def backup() -> None:
+    """Create a consistent SQLite backup in the ignored data/backups directory."""
+    console.print(f"Database backup: {_backup_database()}")
+
+
+@app.command("reset-db")
+def reset_db(confirm: bool = typer.Option(False, "--confirm")) -> None:
+    """Back up the database, then recreate an empty schema after typed confirmation."""
+    if not confirm:
+        console.print("Database reset requires --confirm and typed confirmation.")
+        raise typer.Exit(code=2)
+    if typer.prompt("Type RESET LEADFORGE DATABASE") != "RESET LEADFORGE DATABASE":
+        console.print("Database reset cancelled")
+        raise typer.Exit(code=1)
+    backup_path = _backup_database()
+    database_path = Path(settings.db_path)
+    for path in (
+        database_path,
+        Path(f"{database_path}-wal"),
+        Path(f"{database_path}-shm"),
+    ):
+        path.unlink(missing_ok=True)
+    conn = connect(database_path)
+    try:
+        init_schema(conn)
+    finally:
+        conn.close()
+    console.print(f"Database reset; backup saved to {backup_path}")
+
+
+@app.command("mark-sent")
+def mark_sent(
+    person_id: int,
+    email: str,
+    channel: str = typer.Option("email", "--channel"),
+    follow_up_due: str | None = typer.Option(None, "--follow-up-due"),
+    notes: str | None = typer.Option(None, "--notes"),
+) -> None:
+    """Record that the operator manually sent an outreach message."""
+    normalized = email.strip().casefold()
+    if "@" not in normalized:
+        console.print("A valid email address is required")
+        raise typer.Exit(code=2)
+    conn = connect(settings.db_path)
+    try:
+        init_schema(conn)
+        person = conn.execute("SELECT id FROM person WHERE id=?", (person_id,)).fetchone()
+        candidate = conn.execute(
+            "SELECT evidence_tier,verification_verdict,confidence FROM email_candidate "
+            "WHERE person_id=? AND lower(email)=?",
+            (person_id, normalized),
+        ).fetchone()
+        if person is None or candidate is None:
+            console.print("Person and matching email candidate must exist")
+            raise typer.Exit(code=2)
+        if candidate["evidence_tier"] != "A":
+            console.print("Only Tier A addresses may be marked sent")
+            raise typer.Exit(code=2)
+        if (
+            float(candidate["confidence"]) < settings.min_confidence_to_emit
+            or candidate["verification_verdict"] == "kill"
+        ):
+            console.print("Only eligible, non-killed candidates may be marked sent")
+            raise typer.Exit(code=2)
+        if is_suppressed_or_contacted(conn, normalized, person_id=person_id):
+            console.print("Address or person is suppressed or already contacted")
+            raise typer.Exit(code=2)
+        cap = daily_cap(conn)
+        used = sent_today(conn)
+        if used >= cap:
+            console.print(f"Daily outreach ramp cap reached ({used}/{cap})")
+            raise typer.Exit(code=2)
+        conn.execute(
+            "INSERT INTO outreach(person_id,email,sent_at,channel,outcome,follow_up_due,notes) "
+            "VALUES(?,?,?,?, 'none',?,?)",
+            (person_id, normalized, datetime.now(UTC).isoformat(), channel, follow_up_due, notes),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    _refresh_existing_review()
+    console.print("Manual outreach recorded")
+
+
+@app.command("mark-outcome")
+def mark_outcome(person_id: int, email: str, outcome: str) -> None:
+    """Record the response or opt-out outcome for a manually sent message."""
+    from leadforge.outreach import OUTCOMES
+
+    if outcome not in OUTCOMES:
+        console.print(f"Outcome must be one of: {', '.join(OUTCOMES)}")
+        raise typer.Exit(code=2)
+    conn = connect(settings.db_path)
+    try:
+        init_schema(conn)
+        cursor = conn.execute(
+            "UPDATE outreach SET outcome=? WHERE person_id=? AND lower(email)=?",
+            (outcome, person_id, email.strip().casefold()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    if cursor.rowcount == 0:
+        console.print("No matching outreach record")
+        raise typer.Exit(code=2)
+    if outcome == "opt_out":
+        suppress(email)
+    else:
+        _refresh_existing_review()
+        console.print("Outreach outcome recorded")
+
+
+@app.command("suppress")
+def suppress(value: str) -> None:
+    """Suppress an exact email address or an entire domain from review and today."""
+    normalized = value.strip().casefold().rstrip(".")
+    kind = "email" if "@" in normalized else "domain"
+    if not normalized or (kind == "email" and normalized.count("@") != 1):
+        console.print("Provide one email address or a domain")
+        raise typer.Exit(code=2)
+    conn = connect(settings.db_path)
+    try:
+        init_schema(conn)
+        conn.execute(
+            "INSERT OR IGNORE INTO suppression(kind,value,created_at) VALUES(?,?,?)",
+            (kind, normalized, datetime.now(UTC).isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    _refresh_existing_review()
+    console.print(f"Suppressed {kind}")
+
+
+@app.command("today")
+def today() -> None:
+    """List eligible Tier A people under the current outreach ramp cap."""
+    conn = connect(settings.db_path)
+    try:
+        init_schema(conn)
+        cap = daily_cap(conn)
+        used = sent_today(conn)
+        remaining = max(0, cap - used)
+        rows = conn.execute(
+            "SELECT p.id,p.first_name,p.last_name,p.title,c.name AS company,ec.email,ec.confidence "
+            "FROM email_candidate ec JOIN person p ON p.id=ec.person_id "
+            "JOIN company c ON c.id=p.company_id WHERE ec.evidence_tier='A' "
+            "AND ec.confidence>=? AND COALESCE(ec.verification_verdict,'unknown')!='kill' "
+            "ORDER BY ec.confidence DESC,p.id",
+            (settings.min_confidence_to_emit,),
+        ).fetchall()
+        eligible = [
+            row
+            for row in rows
+            if not is_suppressed_or_contacted(conn, str(row["email"]), person_id=int(row["id"]))
+        ][:remaining]
+    finally:
+        conn.close()
+    console.print(f"Today's list: {len(eligible)} of {remaining} available; ramp cap {used}/{cap}")
+    for row in eligible:
+        console.print(
+            f"  person_id={row['id']} {row['first_name']} {row['last_name']} — "
+            f"{row['title'] or 'role unknown'} at {row['company']} ({row['email']})"
+        )
 
 
 if __name__ == "__main__":

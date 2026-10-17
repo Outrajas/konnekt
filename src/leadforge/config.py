@@ -7,6 +7,7 @@ from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _SETTING_ENV_NAMES: dict[str, str] = {}
+_SETTING_ENV_NAMES_PRESENT: dict[str, set[str]] = {}
 
 
 class Settings(BaseSettings):
@@ -130,15 +131,23 @@ class Settings(BaseSettings):
                     "llm_requests_per_minute",
                     "llm_daily_cap",
                 }:
+                    aliases = []
+                    validation_alias = getattr(field, "validation_alias", None)
+                    if isinstance(validation_alias, AliasChoices):
+                        aliases.extend(str(alias) for alias in validation_alias.choices)
                     for _field_key, env_name, _is_complex in self._extract_field_info(
                         field, field_name
                     ):
                         prefix = str(self.config.get("env_prefix") or "")
-                        candidates = [env_name]
+                        candidates = [env_name, *aliases]
                         if prefix and not env_name.upper().startswith(prefix.upper()):
                             candidates.append(prefix + env_name)
                         available = {name.upper() for name in self.env_vars}
                         available.update(name.upper() for name in os.environ)
+                        present = _SETTING_ENV_NAMES_PRESENT.setdefault(field_name, set())
+                        present.update(
+                            name.upper() for name in candidates if name.upper() in available
+                        )
                         found_name = next(
                             (name.upper() for name in candidates if name.upper() in available),
                             None,
@@ -157,6 +166,11 @@ class Settings(BaseSettings):
 def setting_env_name(field_name: str) -> str | None:
     """Return only the selected setting variable's name, never its value."""
     return _SETTING_ENV_NAMES.get(field_name)
+
+
+def setting_env_names(field_name: str) -> tuple[str, ...]:
+    """Return only the names of supplied aliases for a setting."""
+    return tuple(sorted(_SETTING_ENV_NAMES_PRESENT.get(field_name, set())))
 
 
 settings = Settings()

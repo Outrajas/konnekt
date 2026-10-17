@@ -13,7 +13,14 @@ from leadforge.sources.ats import detect_ats_link, fetch_jobs
 from leadforge.sources.careers import is_js_shell, parse_careers_page
 from leadforge.sources.hn import discover_hiring_posts
 from leadforge.stages.matching import match_job
-from leadforge.web.errors import FetchError
+from leadforge.web.errors import (
+    Blocked,
+    BudgetExhausted,
+    DeniedHost,
+    DomainPaused,
+    FetchError,
+    RobotsDisallowed,
+)
 from leadforge.web.extract import extract_links
 from leadforge.web.fetcher import Fetcher
 from leadforge.web.policy import DomainPolicy
@@ -58,6 +65,8 @@ async def discover_company_jobs(
         url = f"https://{company.domain}{path}"
         try:
             page = await router.fetch(url)
+        except (Blocked, BudgetExhausted, DeniedHost, DomainPaused, RobotsDisallowed):
+            raise
         except FetchError:
             continue
         links = extract_links(page.html, page.final_url)

@@ -9,7 +9,15 @@ leadforge doctor
 leadforge init-db
 ```
 
-`doctor` reports local configuration, tool availability, daily platform budgets, and the port-25 probe result with a remedy. `init-db` creates or migrates the local SQLite database.
+`doctor` reports local configuration, daily platform budgets, environment variable names (never values), and the port-25 probe result with a remedy. `init-db` creates or migrates the local SQLite database.
+
+## Database and outreach tracking
+
+`leadforge backup` writes a consistent database copy to the ignored `data/backups/` folder. To recreate an empty schema, run `leadforge reset-db --confirm` and type `RESET LEADFORGE DATABASE` when prompted.
+
+The outreach tracker only records work the operator has done manually; it never sends messages. Preview the currently eligible list with `leadforge today`. After manually sending a Tier A message, record it with `leadforge mark-sent <person_id> <email>`. Record a later response with `leadforge mark-outcome <person_id> <email> <outcome>` where outcome is `reply`, `bounce`, `auto_reply`, or `opt_out`. Suppress an exact address or whole domain with `leadforge suppress <email-or-domain>`. The cap ramps from 5 per day in the first week to 10 in the second week and 20 thereafter. Suppressed and contacted people are removed from the review file and today's list.
+
+Run the capped daily sequence with `leadforge run-daily --dry-run` to preview it and `leadforge run-daily` to start it. The live run keeps a lock while active and records completed stages so it can resume after interruption. It stops when a routed fetch is blocked. Check existing draft quality with `leadforge drafts --check`; drafts with missing professional evidence remain marked `NEEDS_MANUAL_PERSONALIZATION` in `review.csv`.
 
 ## Fetch a page
 
