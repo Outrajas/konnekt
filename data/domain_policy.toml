@@ -87,3 +87,19 @@ min_delay_s = 2.0
 max_delay_s = 5.0
 daily_cap = 100
 max_tier = 1
+
+["wellfound.com"]
+enabled = true
+min_delay_s = 30.0
+max_delay_s = 90.0
+daily_cap = 10
+max_tier = 1
+allow_challenge_solving = false
+
+["workatastartup.com"]
+enabled = true
+min_delay_s = 5.0
+max_delay_s = 15.0
+daily_cap = 40
+max_tier = 2
+allow_challenge_solving = false
