@@ -4,6 +4,8 @@ Self-hosted email enrichment pipeline for job-search outreach.
 
 ## Quickstart (Windows PowerShell)
 
+The operator uses `.\.venv`; the agent uses `.\.venv-agent`. The agent environment is a workspace copy configured for the Codex Python runtime.
+
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1

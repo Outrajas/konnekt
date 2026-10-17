@@ -4,9 +4,17 @@ from scripts.check_tracked_files import tracked_file_violations
 def test_forbidden_paths_are_reported(tmp_path) -> None:
     violations = tracked_file_violations(
         tmp_path,
-        [".env", "data/input/companies.csv", "data/profile.json", "bin/tool.exe", "run.db"],
+        [
+            ".env",
+            "data/input/companies.csv",
+            "data/profile.json",
+            "bin/tool.exe",
+            "run.db",
+            ".venv/Lib/site-packages/example.py",
+            ".venv-agent/Lib/site-packages/example.py",
+        ],
     )
-    assert len(violations) == 5
+    assert len(violations) == 7
 
 
 def test_gitkeep_is_allowed_but_api_key_pattern_is_rejected(tmp_path) -> None:

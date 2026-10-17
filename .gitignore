@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+.venv-agent/
 venv/
 .pytest_cache/
 .mypy_cache/
@@ -44,3 +45,5 @@ Thumbs.db
 .diag/
 
 .pytest_cache_old/
+
+.pytest_tmp_agent/
