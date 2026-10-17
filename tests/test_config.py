@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from leadforge.config import _SETTING_ENV_NAMES, Settings, setting_env_name
+from leadforge.config import (
+    _SETTING_ENV_NAMES,
+    _SETTING_ENV_NAMES_PRESENT,
+    Settings,
+    setting_env_name,
+    setting_env_names,
+)
 
 
 def test_settings_defaults() -> None:
@@ -29,7 +35,9 @@ def test_obscura_path_uses_operator_named_environment_variable(monkeypatch) -> N
 def test_unprefixed_and_prefixed_aliases_are_accepted_without_printing_values(monkeypatch) -> None:
     monkeypatch.delenv("LLM_MODEL", raising=False)
     _SETTING_ENV_NAMES.pop("llm_model", None)
+    _SETTING_ENV_NAMES_PRESENT.pop("llm_api_key", None)
     monkeypatch.setenv("LLM_API_KEY", "do-not-print-this")
+    monkeypatch.setenv("LEADFORGE_LLM_API_KEY", "also-do-not-print-this")
     monkeypatch.setenv("LEADFORGE_LLM_MODEL", "test-model")
     monkeypatch.setenv("SMTP_MAIL_FROM", "sender@company.invalid")
     monkeypatch.setenv("DNS_NAMESERVERS", '["192.0.2.1"]')
@@ -42,6 +50,7 @@ def test_unprefixed_and_prefixed_aliases_are_accepted_without_printing_values(mo
     assert setting_env_name("smtp_mail_from") == "SMTP_MAIL_FROM"
     assert setting_env_name("dns_nameservers") == "DNS_NAMESERVERS"
     assert setting_env_name("llm_model") == "LEADFORGE_LLM_MODEL"
+    assert set(setting_env_names("llm_api_key")) == {"LLM_API_KEY", "LEADFORGE_LLM_API_KEY"}
     assert "do-not-print-this" not in repr(settings)
 
 

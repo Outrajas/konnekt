@@ -28,7 +28,8 @@ def conn(tmp_path):
 
 def test_schema_is_idempotent_and_foreign_keys_are_enabled(conn) -> None:
     init_schema(conn)
-    assert schema_version(conn) == 3
+    assert schema_version(conn) == 4
+    assert conn.execute("SELECT name FROM sqlite_master WHERE name='outreach'").fetchone()
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
 

@@ -391,7 +391,11 @@ def test_walk_cli_replay_mode_runs_offline_and_persists_result(monkeypatch) -> N
     import leadforge.cli as cli
 
     persisted = []
-    monkeypatch.setattr(cli, "_persist_walk_result", lambda result: persisted.append(result))
+    monkeypatch.setattr(
+        cli,
+        "_persist_walk_result",
+        lambda result, **_kwargs: persisted.append(result),
+    )
     replay_dir = Path("data/fixtures/replay/person_walk")
     result = CliRunner().invoke(
         app,

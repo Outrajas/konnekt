@@ -89,9 +89,15 @@ async def run_enrichment(
                             pages_visited=[],
                             contact=contact,
                         )
-                        persisted = persist_fn(failed)
-                        if inspect.isawaitable(persisted):
-                            await persisted
+                        try:
+                            persisted = persist_fn(failed)
+                            if inspect.isawaitable(persisted):
+                                await persisted
+                        except Exception as persist_error:
+                            log.error(
+                                "Could not persist failed person record (%s)",
+                                type(persist_error).__name__,
+                            )
 
     await asyncio.gather(*(run_company(group) for group in groups.values()))
     return [results[index] for index in sorted(results)]

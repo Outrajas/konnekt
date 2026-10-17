@@ -1,6 +1,9 @@
 from email.message import EmailMessage
 from pathlib import Path
 
+from typer.testing import CliRunner
+
+from leadforge import cli
 from leadforge.config import Settings
 from leadforge.db import connect, init_schema
 from leadforge.stages.import_pages import (
@@ -11,6 +14,114 @@ from leadforge.stages.import_pages import (
 )
 
 FIXTURES = Path("tests/fixtures/saved_pages")
+
+
+def test_import_pages_dry_run_uses_replay_database_only(tmp_path, monkeypatch) -> None:
+    settings = Settings(
+        _env_file=None,
+        input_dir=tmp_path / "input",
+        output_dir=tmp_path / "output",
+        cache_dir=tmp_path / "cache",
+        db_path=tmp_path / "real.db",
+    )
+    settings.input_dir.joinpath("saved_pages").mkdir(parents=True)
+    settings.db_path.write_bytes(b"operator database sentinel")
+    monkeypatch.setattr(cli, "settings", settings)
+
+    result = CliRunner().invoke(cli.app, ["import-pages", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert settings.db_path.read_bytes() == b"operator database sentinel"
+    assert (settings.cache_dir / "replay.db").is_file()
+
+
+def test_enrich_replay_persists_to_replay_database_not_real_database(tmp_path, monkeypatch) -> None:
+    settings = Settings(
+        _env_file=None,
+        data_dir=tmp_path / "data",
+        input_dir=tmp_path / "input",
+        output_dir=tmp_path / "output",
+        cache_dir=tmp_path / "cache",
+        db_path=tmp_path / "real.db",
+    )
+    settings.db_path.write_bytes(b"operator database sentinel")
+    contacts = tmp_path / "contacts.csv"
+    contacts.write_text(
+        "first_name,last_name,domain,company\nJane,Doe,acme.invalid,Acme\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "settings", settings)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["enrich", str(contacts), "--replay", "data/fixtures/sample"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert settings.db_path.read_bytes() == b"operator database sentinel"
+    assert (settings.cache_dir / "replay.db").is_file()
+
+
+def test_people_replay_uses_isolated_database(tmp_path, monkeypatch) -> None:
+    settings = Settings(
+        _env_file=None,
+        data_dir=tmp_path / "data",
+        input_dir=tmp_path / "input",
+        output_dir=tmp_path / "output",
+        cache_dir=tmp_path / "cache",
+        db_path=tmp_path / "real.db",
+    )
+    settings.db_path.write_bytes(b"operator database sentinel")
+    monkeypatch.setattr(cli, "settings", settings)
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "people",
+            "--company",
+            "Acme",
+            "--domain",
+            "acme.invalid",
+            "--replay",
+            "data/fixtures/people/sample",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert settings.db_path.read_bytes() == b"operator database sentinel"
+    assert (settings.cache_dir / "replay.db").is_file()
+
+
+def test_walk_replay_persists_to_isolated_database(tmp_path, monkeypatch) -> None:
+    settings = Settings(
+        _env_file=None,
+        data_dir=tmp_path / "data",
+        input_dir=tmp_path / "input",
+        output_dir=tmp_path / "output",
+        cache_dir=tmp_path / "cache",
+        db_path=tmp_path / "real.db",
+    )
+    settings.db_path.write_bytes(b"operator database sentinel")
+    monkeypatch.setattr(cli, "settings", settings)
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "walk",
+            "--company-domain",
+            "acme.invalid",
+            "--first",
+            "Jane",
+            "--last",
+            "Doe",
+            "--replay",
+            "data/fixtures/replay/person_walk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert settings.db_path.read_bytes() == b"operator database sentinel"
+    assert (settings.cache_dir / "replay.db").is_file()
 
 
 def test_parses_fictional_page_kinds_and_drops_unrelated_fields() -> None:

@@ -24,6 +24,7 @@ data/profile.json
 data/output/*
 data/cache/*
 !data/cache/.gitkeep
+data/backups/
 *.db
 *.db-journal
 bin/

@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 
-from leadforge.models import Job
+from leadforge.models import Job, OperatorProfile
 from leadforge.sources.ats import (
     detect_ats_link,
     parse_ashby,
@@ -16,8 +16,10 @@ from leadforge.sources.search import (
     dedupe_people,
     parse_person_snippet,
 )
+from leadforge.stages.discovery import CompanyInput, discover_company_jobs
 from leadforge.stages.matching import match_job
 from leadforge.stages.profile import extract_profile
+from leadforge.web.errors import Blocked
 
 FIXTURES = Path(__file__).parent / "fixtures" / "sources" / "phase13"
 
@@ -140,3 +142,23 @@ async def test_searxng_provider_routes_json_fetch_through_injected_router() -> N
     assert len(hits) == 1
     assert hits[0].title.startswith("Jane Doe")
     assert router.calls[0][1] == {"min_tier": 1, "max_tier": 1, "purpose": "search"}
+
+
+async def test_company_discovery_propagates_blocks_instead_of_trying_more_paths() -> None:
+    class BlockedRouter:
+        calls = []
+
+        async def fetch(self, url, **kwargs):
+            self.calls.append(url)
+            raise Blocked("fictional blocked response")
+
+    router = BlockedRouter()
+    try:
+        await discover_company_jobs(
+            CompanyInput("Acme", "acme.invalid"), OperatorProfile(), fetcher=router
+        )
+    except Blocked:
+        pass
+    else:
+        raise AssertionError("block should stop discovery")
+    assert len(router.calls) == 1
