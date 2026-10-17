@@ -27,7 +27,7 @@ def tracked_file_violations(root: Path, tracked_paths: list[str]) -> list[str]:
             or (normalized.startswith("data/input/") and normalized != "data/input/.gitkeep")
             or normalized == "data/profile.json"
             or normalized.startswith("data/output/")
-            or parts[0] == "bin"
+            or parts[0] in {"bin", ".venv", ".venv-agent"}
             or Path(normalized).name.lower().endswith(".db")
         )
         if forbidden_path:

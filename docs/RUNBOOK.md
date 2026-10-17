@@ -1,6 +1,6 @@
 # Leadforge runbook
 
-Run commands from the repository root in PowerShell after activating `.venv`.
+Run operator commands from the repository root in PowerShell after activating `.venv`. The operator uses `.\.venv`; the agent uses `.\.venv-agent`.
 
 ```powershell
 .\.venv\Scripts\Activate.ps1

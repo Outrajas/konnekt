@@ -43,6 +43,7 @@ packages = ["src/leadforge"]
 
 [tool.ruff]
 line-length = 100
+extend-exclude = ["docs/AGENT_BASELINE_PLAN.md"]
 target-version = "py312"
 
 [tool.ruff.lint]
@@ -51,4 +52,4 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-q -p no:cacheprovider --basetemp=.pytest_tmp"
+addopts = "-q -p no:cacheprovider --basetemp=.pytest_tmp_agent"

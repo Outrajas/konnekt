@@ -1,6 +1,5 @@
 import asyncio
 import csv
-import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -75,8 +74,9 @@ def version() -> None:
 
 @app.command()
 def doctor() -> None:
-    """Check Python, dependencies, and external tool availability."""
+    """Check Python, dependencies, and local configuration."""
     console.print(f"[bold]Python:[/] {sys.version.split()[0]}")
+    console.print("[bold]Environments:[/] operator uses .\\.venv; agent uses .\\.venv-agent")
     console.print(f"[bold]Data dir:[/] {settings.data_dir.resolve()}")
     console.print(f"[bold]SMTP verify mode:[/] {settings.smtp_verify_mode}")
     mail_from_name = setting_env_name("smtp_mail_from")
@@ -150,17 +150,6 @@ def doctor() -> None:
         else:
             console.print("  Remedy: No action needed; outbound port 25 is reachable.")
     console.print()
-
-    console.print("[bold]External tools:[/]")
-    for tool, hint in (
-        ("es", "email-sleuth (cargo install email-sleuth)"),
-        ("websearch", "websearch-skill (pip install websearch-skill)"),
-    ):
-        path = shutil.which(tool)
-        if path:
-            console.print(f"  [green]+[/] {tool}: {path}")
-        else:
-            console.print(f"  [yellow]-[/] {tool}: not found -- {hint}")
 
 
 def _show_platform_budgets() -> None:
