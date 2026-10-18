@@ -48,4 +48,5 @@ Thumbs.db
 .pytest_cache_old/
 
 .pytest_tmp_agent/
+.pytest_tmp_agent_*/
 .pytest_tmp_op/
