@@ -25,6 +25,10 @@ signal, a resolving DNS name, and a homepage that names the company. At least
 companies file untouched. If it finds 8–14, the pipeline may proceed with those
 results. The target is 25.
 
+Sources without operator-cached markup are reported as unrecognised, and their
+card structures are not guessed. A low accepted count may mean page markup
+needs to be captured and supported before another run.
+
 `run-daily --dry-run` previews the capped discover, people, enrich, and report
 stages. `run-daily` executes them with a lock and resumable stage state. Review
 `report` for detailed local pipeline metrics; `export-run-summary` writes a
