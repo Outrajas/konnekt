@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import tldextract
 from bs4 import BeautifulSoup
@@ -100,7 +100,7 @@ class _StatsFetcher(Fetcher):
             category = _fetch_error_category(exc)
             self.stats.blocks += category == "block"
             self.stats.robots_refusals += category == "robots"
-            if category in {"block", "robots"}:
+            if category in {"block", "robots"} or isinstance(exc, BudgetExhausted):
                 self.unavailable_hosts.add(host)
             raise
         self.stats.pages += 1
@@ -124,26 +124,26 @@ def _official_domain(url: str) -> str | None:
     return extracted.top_domain_under_public_suffix or None
 
 
-def parse_yc_jobs(html: str) -> ParsedListing:
-    return _parse_cards(html, "yc-jobs")
+def parse_yc_jobs(html: str, base_url: str = "") -> ParsedListing:
+    return _parse_cards(html, "yc-jobs", base_url)
 
 
-def parse_yc_companies(html: str) -> ParsedListing:
-    return _parse_cards(html, "yc-companies")
+def parse_yc_companies(html: str, base_url: str = "") -> ParsedListing:
+    return _parse_cards(html, "yc-companies", base_url)
 
 
-def parse_workatastartup_jobs(html: str) -> ParsedListing:
-    return _parse_cards(html, "workatastartup")
+def parse_workatastartup_jobs(html: str, base_url: str = "") -> ParsedListing:
+    return _parse_cards(html, "workatastartup", base_url)
 
 
-def parse_job_result_cards(html: str, source: str) -> ParsedListing:
+def parse_job_result_cards(html: str, source: str, base_url: str = "") -> ParsedListing:
     """Parse known semantic job cards; unsupported markup returns unrecognised."""
     if source not in {"wellfound", "linkedin", "glassdoor", "indeed"}:
         raise ValueError(f"Unsupported job-card source: {source}")
-    return _parse_cards(html, source)
+    return _parse_cards(html, source, base_url)
 
 
-def _parse_cards(html: str, source: str) -> ParsedListing:
+def _parse_cards(html: str, source: str, base_url: str = "") -> ParsedListing:
     soup = BeautifulSoup(html, "lxml")
     selectors = (
         "article[data-job-id], [data-testid='job-card'], [data-testid='job-listing'], "
@@ -165,21 +165,21 @@ def _parse_cards(html: str, source: str) -> ParsedListing:
                 structured.append(item)
     records: list[dict[str, str]] = []
     for card in cards:
-        record = _card_record(card)
+        record = _card_record(card, base_url)
         if record:
             records.append(record)
     for item in structured:
         title = str(item.get("title") or item.get("name") or "").strip()
         org = item.get("hiringOrganization") or item
         name = str(org.get("name") or "").strip() if isinstance(org, dict) else ""
-        url = str(item.get("url") or "")
-        domain = str(org.get("url") or "") if isinstance(org, dict) else ""
+        url = urljoin(base_url, str(item.get("url") or ""))
+        domain = _official_domain(str(org.get("url") or "")) or "" if isinstance(org, dict) else ""
         location = item.get("jobLocation") or {}
         if isinstance(location, list):
             location = location[0] if location else {}
         address = location.get("address", {}) if isinstance(location, dict) else {}
         loc = " ".join(str(address.get(key) or "") for key in ("addressLocality", "addressCountry"))
-        if title and name:
+        if title and name and url.startswith(("http://", "https://")):
             records.append(
                 {
                     "name": name,
@@ -189,10 +189,10 @@ def _parse_cards(html: str, source: str) -> ParsedListing:
                     "domain": domain,
                 }
             )
-    return ParsedListing(records=records, recognized=bool(cards or structured))
+    return ParsedListing(records=records, recognized=bool(records))
 
 
-def _card_record(card) -> dict[str, str] | None:
+def _card_record(card, base_url: str = "") -> dict[str, str] | None:
     def text(selector: str) -> str:
         node = card.select_one(selector)
         return " ".join(node.get_text(" ", strip=True).split()) if node else ""
@@ -209,7 +209,7 @@ def _card_record(card) -> dict[str, str] | None:
         "[data-location], .location, [itemprop='jobLocation']"
     )
     link = card.select_one("a[href]")
-    url = str(link.get("href") or "") if link else ""
+    url = urljoin(base_url, str(link.get("href") or "")) if link else ""
     domain = ""
     for anchor in card.select(
         "a[data-company-website], a[rel='external'], a[aria-label*='website' i]"
@@ -218,14 +218,14 @@ def _card_record(card) -> dict[str, str] | None:
         if candidate:
             domain = candidate
             break
-    if not (name and title):
+    if not (name and title and url.startswith(("http://", "https://"))):
         return None
     return {"name": name, "title": title, "location": location, "url": url, "domain": domain}
 
 
-def parse_social_listing(html: str, source: str) -> ParsedListing:
+def parse_social_listing(html: str, source: str, base_url: str = "") -> ParsedListing:
     """Named platform entry point; no selector match is explicitly unrecognised."""
-    return parse_job_result_cards(html, source)
+    return parse_job_result_cards(html, source, base_url)
 
 
 def _fetch_error_category(exc: Exception) -> str:
@@ -256,7 +256,9 @@ async def _fetch_page(
         category = _fetch_error_category(exc)
         stats.blocks += category == "block"
         stats.robots_refusals += category == "robots"
-        if category in {"block", "robots"} and unavailable_hosts is not None:
+        if (
+            category in {"block", "robots"} or isinstance(exc, BudgetExhausted)
+        ) and unavailable_hosts is not None:
             unavailable_hosts.add(host)
         return None
     stats.pages += 1
@@ -436,11 +438,11 @@ async def seed(
                 stat.unrecognised += 1
                 continue
             parsed = (
-                parse_workatastartup_jobs(html)
+                parse_workatastartup_jobs(html, f"https://{host}{path}")
                 if source == "workatastartup"
-                else parse_yc_jobs(html)
+                else parse_yc_jobs(html, f"https://{host}{path}")
                 if source == "yc-jobs"
-                else parse_yc_companies(html)
+                else parse_yc_companies(html, f"https://{host}{path}")
             )
             stat.pages += 1
             if not parsed.recognized:
@@ -475,7 +477,7 @@ async def seed(
             )
             if page is None:
                 continue
-            parsed = parser(page.html)
+            parsed = parser(page.html, page.final_url)
             if not parsed.recognized:
                 stats[source].unrecognised += 1
             for row in parsed.records:
@@ -494,7 +496,7 @@ async def seed(
         try:
             hn_router = _StatsFetcher(router, stats["hacker-news"], unavailable_hosts)
             hn_jobs = await discover_hiring_posts(
-                fetcher=hn_router, max_stories=200, max_comments=100
+                fetcher=hn_router, max_stories=20, max_comments=60
             )
         except Exception:
             hn_jobs = []
@@ -536,7 +538,7 @@ async def seed(
             )
             if page is None:
                 continue
-            parsed = parse_social_listing(page.html, source)
+            parsed = parse_social_listing(page.html, source, page.final_url)
             if not parsed.recognized:
                 stats[source].unrecognised += 1
             for row in parsed.records:
