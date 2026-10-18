@@ -65,6 +65,13 @@ def test_run_summary_contains_counts_only_and_no_url_queries(tmp_path):
         json.dumps({"yc-jobs": {"pages": 2, "companies": 1, "blocks": 0, "robots_refusals": 0}}),
         encoding="utf-8",
     )
+    cfg.output_dir.mkdir(parents=True)
+    (cfg.output_dir / "enriched_fixture.csv").write_text(
+        "first_name,email,source_url,fetches_used\n"
+        "Faye,faye@example.invalid,https://fictional.invalid/p?query=private,4\n"
+        "Fin,fin@example.invalid,https://fictional.invalid/q?query=private,6\n",
+        encoding="utf-8",
+    )
 
     path = export_run_summary(cfg)
     content = path.read_text(encoding="utf-8")
@@ -78,3 +85,4 @@ def test_run_summary_contains_counts_only_and_no_url_queries(tmp_path):
     assert payload["stages"]["enrich"]["tier_a"] == 1
     assert payload["stages"]["enrich"]["not_found"] == 1
     assert payload["stages"]["enrich"]["http_429s"] == 1
+    assert payload["stages"]["enrich"]["average_fetches"] == 5.0

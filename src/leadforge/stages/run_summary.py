@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import sqlite3
 from pathlib import Path
@@ -78,6 +79,28 @@ def _seed_counts(path: Path) -> dict[str, dict[str, int]]:
     return output
 
 
+def _latest_enrichment_fetch_counts(output_dir: Path) -> list[int]:
+    """Read only numeric fetch counts from the latest enrichment CSV."""
+    paths = list(output_dir.glob("enriched_*.csv"))
+    if not paths:
+        return []
+    try:
+        latest = max(paths, key=lambda path: path.stat().st_mtime_ns)
+        with latest.open("r", encoding="utf-8", newline="") as handle:
+            rows = csv.DictReader(handle)
+            values = []
+            for row in rows:
+                try:
+                    value = int(row.get("fetches_used", ""))
+                except (TypeError, ValueError):
+                    continue
+                if value >= 0:
+                    values.append(value)
+            return values
+    except OSError:
+        return []
+
+
 def build_run_summary(active_settings: Settings | None = None) -> dict[str, Any]:
     """Aggregate only numeric fields and fixed source/stage labels from the local DB."""
     cfg = active_settings or settings
@@ -143,13 +166,9 @@ def build_run_summary(active_settings: Settings | None = None) -> dict[str, Any]
                         "SELECT COUNT(DISTINCT person_id) FROM email_candidate"
                     ).fetchone()[0]
                 )
-            fetches = 0
             rate_limits = 0
             robots = 0
             if _table_exists(conn, "run_log"):
-                fetches = int(
-                    conn.execute("SELECT COUNT(*) FROM run_log WHERE stage='fetch'").fetchone()[0]
-                )
                 rate_limits = int(
                     conn.execute(
                         "SELECT COUNT(*) FROM run_log WHERE stage='fetch' "
@@ -169,7 +188,7 @@ def build_run_summary(active_settings: Settings | None = None) -> dict[str, Any]
         finally:
             conn.close()
     else:
-        people = not_found = enriched_people = fetches = rate_limits = robots = calls = 0
+        people = not_found = enriched_people = rate_limits = robots = calls = 0
         tiers = {"A": 0, "B": 0, "C": 0}
     # Keep source labels fixed and count-only. Seed stats include robots refusals;
     # supplement them from safe, aggregate run-log counts where available.
@@ -177,6 +196,7 @@ def build_run_summary(active_settings: Settings | None = None) -> dict[str, Any]
         source_counts["other"]["robots_refusals"] += robots
     for source, count in db_company_counts.items():
         source_counts[source]["companies"] = max(source_counts[source]["companies"], count)
+    fetch_counts = _latest_enrichment_fetch_counts(cfg.output_dir)
     stage_counts["people"]["people"] = people
     stage_counts["enrich"].update(
         {
@@ -185,7 +205,9 @@ def build_run_summary(active_settings: Settings | None = None) -> dict[str, Any]
             "tier_b": tiers["B"],
             "tier_c": tiers["C"],
             "not_found": not_found,
-            "average_fetches": round(fetches / people, 2) if people else 0.0,
+            "average_fetches": (
+                round(sum(fetch_counts) / len(fetch_counts), 2) if fetch_counts else 0.0
+            ),
             "llm_calls": calls,
             "http_429s": rate_limits,
         }
