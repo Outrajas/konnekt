@@ -859,10 +859,23 @@ def enrich(
 
 
 @app.command("run-daily")
-def run_daily(dry_run: bool = typer.Option(False, "--dry-run")) -> None:
+def run_daily(
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    seed: bool = typer.Option(False, "--seed"),
+) -> None:
     """Run the capped discover, people, enrich, and report stages with a resumable lock."""
     companies_path = settings.input_dir / "companies.csv"
     profile_path = settings.data_dir / "profile.json"
+    seed_planned = _seed_companies_if_needed(companies_path, enabled=seed, dry_run=dry_run)
+    if dry_run and seed_planned:
+        console.print("run-daily plan after seed-companies (no network requests):")
+        console.print("  discover seeded companies")
+        console.print("  people: up to 3 per company within host budgets")
+        console.print(
+            f"  enrich: at most {min(20, _outreach_cap())} people with configured walk budgets"
+        )
+        console.print("  report")
+        return
     if not companies_path.is_file() or not profile_path.is_file():
         console.print("run-daily requires data/input/companies.csv and data/profile.json")
         raise typer.Exit(code=2)
@@ -946,6 +959,26 @@ def run_daily(dry_run: bool = typer.Option(False, "--dry-run")) -> None:
             raise typer.Exit(code=1) from None
     finally:
         lock_path.unlink(missing_ok=True)
+
+
+def _seed_companies_if_needed(companies_path: Path, *, enabled: bool, dry_run: bool) -> bool:
+    has_companies = companies_path.is_file() and bool(read_companies(companies_path))
+    if has_companies or not enabled:
+        return False
+    console.print("companies.csv is missing or empty; running seed-companies first")
+    accepted, stats = seed_sync(target=25, dry_run=dry_run)
+    if dry_run:
+        return True
+    if len(accepted) < 8:
+        console.print("STOP: seed-companies accepted fewer than 8 companies")
+        for source, item in stats.items():
+            console.print(
+                f"  {source}: pages={item.pages}, companies={item.companies}, "
+                f"blocks={item.blocks}, robots_refusals={item.robots_refusals}"
+            )
+        raise typer.Exit(code=2)
+    console.print(f"seed-companies accepted {len(accepted)} companies")
+    return True
 
 
 def _outreach_cap() -> int:
