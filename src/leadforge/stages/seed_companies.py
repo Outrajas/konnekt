@@ -30,6 +30,7 @@ from leadforge.sources.search import DuckDuckGoProvider
 from leadforge.web.errors import Blocked, BudgetExhausted, DomainPaused, FetchError
 from leadforge.web.extract import extract_links
 from leadforge.web.fetcher import Fetcher
+from leadforge.web.policy import DomainPolicy
 
 ENTRY = re.compile(r"\b(intern(?:ship)?|graduate|junior|trainee|entry[ -]level)\b", re.I)
 GOOD_LOC = re.compile(r"\b(india|remote|global|anywhere)\b", re.I)
@@ -79,6 +80,31 @@ class SourceStats:
     blocks: int = 0
     robots_refusals: int = 0
     unrecognised: int = 0
+
+
+class _StatsFetcher(Fetcher):
+    """Count routed requests while preserving the Fetcher policy boundary."""
+
+    def __init__(self, delegate: Fetcher, stats: SourceStats, unavailable_hosts: set[str]) -> None:
+        self.delegate = delegate
+        self.stats = stats
+        self.unavailable_hosts = unavailable_hosts
+
+    async def fetch(self, url: str, *args, **kwargs):
+        host = (urlsplit(url).hostname or "").lower()
+        if host in self.unavailable_hosts:
+            raise DomainPaused(f"{host} unavailable for this run")
+        try:
+            result = await self.delegate.fetch(url, *args, **kwargs)
+        except (Blocked, BudgetExhausted, DomainPaused, FetchError) as exc:
+            category = _fetch_error_category(exc)
+            self.stats.blocks += category == "block"
+            self.stats.robots_refusals += category == "robots"
+            if category in {"block", "robots"}:
+                self.unavailable_hosts.add(host)
+            raise
+        self.stats.pages += 1
+        return result
 
 
 def _domain(url: str) -> str:
@@ -330,6 +356,15 @@ async def seed(
     cfg = active_settings or settings
     router = fetcher or Fetcher(cfg)
     resolve = dns_resolver or _dns_resolves
+    if profile is None:
+        profile_path = cfg.data_dir / "profile.json"
+        if profile_path.is_file():
+            try:
+                profile = OperatorProfile.model_validate_json(
+                    profile_path.read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError):
+                profile = None
     homepage_ok = homepage_check
     stats = {
         key: SourceStats()
@@ -360,10 +395,26 @@ async def seed(
         ("duckduckgo", "only missing official-domain lookups"),
     ]
     if dry_run:
+        policy = DomainPolicy.load(cfg.domain_policy_path, cfg)
+        hosts = {
+            "yc-jobs": "www.ycombinator.com",
+            "yc-companies": "www.ycombinator.com",
+            "workatastartup": "www.workatastartup.com",
+            "hacker-news": "hacker-news.firebaseio.com",
+            "ats": "boards-api.greenhouse.io",
+            "wellfound": "wellfound.com",
+            "linkedin": "www.linkedin.com",
+            "glassdoor": "www.glassdoor.com",
+            "indeed": "www.indeed.com",
+            "duckduckgo": "html.duckduckgo.com",
+        }
         print("Seed fetch plan (no requests made):")
         for source, item in plan:
-            print(f"  {source}: {item}")
-        print("  platform budget: at most one listing page per platform; policy caps apply")
+            rule = policy.resolve(hosts[source])
+            print(
+                f"  {source}: {item}; cap={rule.daily_cap}/day, max_tier={rule.max_tier}, "
+                f"spacing={rule.min_delay_s:g}-{rule.max_delay_s:g}s"
+            )
         return [], stats
 
     if not 8 <= target <= 25:
@@ -441,14 +492,17 @@ async def seed(
                         )
                     )
         try:
-            hn_jobs = await discover_hiring_posts(fetcher=router, max_stories=200, max_comments=100)
-            stats["hacker-news"].pages += 1
+            hn_router = _StatsFetcher(router, stats["hacker-news"], unavailable_hosts)
+            hn_jobs = await discover_hiring_posts(
+                fetcher=hn_router, max_stories=200, max_comments=100
+            )
         except Exception:
             hn_jobs = []
-            stats["hacker-news"].blocks += 1
         known = {c.name.casefold() for c in candidates}
         for job in hn_jobs:
-            if job.company.casefold() in known and _role_ok(job.title, job.location or "remote"):
+            if job.company.casefold() in known and (
+                _role_ok(job.title, job.location or "remote") or job.invites_email
+            ):
                 candidates.append(
                     SeedCompany(
                         job.company,
@@ -508,20 +562,24 @@ async def seed(
             )
             if seed_candidate is None:
                 continue
-            homepage = await _fetch_page(router, f"https://{candidate_domain}/", stats["homepages"])
+            homepage = await _fetch_page(
+                router,
+                f"https://{candidate_domain}/",
+                stats["homepages"],
+                unavailable_hosts=unavailable_hosts,
+            )
             if homepage is None:
                 continue
             links = extract_links(homepage.html, homepage.final_url)
             ats = detect_ats_link([link.url for link in links])
             if ats:
                 try:
+                    ats_router = _StatsFetcher(router, stats["ats"], unavailable_hosts)
                     board_jobs = await fetch_jobs(
-                        ats[0], ats[1], seed_candidate.name, candidate_domain, fetcher=router
+                        ats[0], ats[1], seed_candidate.name, candidate_domain, fetcher=ats_router
                     )
                 except (Blocked, BudgetExhausted, DomainPaused, FetchError):
-                    stats["ats"].blocks += 1
                     continue
-                stats["ats"].pages += 1
                 for job in board_jobs:
                     if _role_ok(job.title, job.location or ""):
                         candidates.append(
@@ -563,6 +621,7 @@ async def seed(
         if (
             not candidate.name
             or AGENCY.search(candidate.name)
+            or AGENCY.search(candidate.role_title)
             or not domain
             or not _accepted_domain(domain, resolve)
         ):
@@ -572,11 +631,19 @@ async def seed(
         elif from_cache:
             homepage_valid = False
         else:
-            homepage = await _fetch_page(router, f"https://{domain}/", stats["homepages"])
-            homepage_valid = bool(
-                homepage
-                and candidate.name.casefold()
-                in BeautifulSoup(homepage.html, "lxml").get_text(" ", strip=True).casefold()
+            homepage = await _fetch_page(
+                router,
+                f"https://{domain}/",
+                stats["homepages"],
+                unavailable_hosts=unavailable_hosts,
+            )
+            homepage_text = (
+                BeautifulSoup(homepage.html, "lxml").get_text(" ", strip=True).casefold()
+                if homepage
+                else ""
+            )
+            homepage_valid = candidate.name.casefold() in homepage_text and not AGENCY.search(
+                homepage_text
             )
         if not homepage_valid:
             continue
@@ -620,10 +687,22 @@ def _dns_resolves(domain: str) -> bool:
 def _prefer_early_stage(items: list[SeedCompany], target: int) -> list[SeedCompany]:
     # Marking early-stage is based on explicit source provenance, not a guessed
     # company-size claim. YC/Work at a Startup entries qualify as small/early.
-    early = [item for item in items if item.source in {"yc-jobs", "yc-companies", "workatastartup"}]
-    other = [item for item in items if item not in early]
-    minimum = min(len(early), (target + 1) // 2)
-    return (early[:minimum] + other[: max(0, target - minimum)] + early[minimum:])[:target]
+    def is_early(item: SeedCompany) -> bool:
+        return item.source in {"yc-jobs", "yc-companies", "workatastartup"}
+
+    selected = items[:target]
+    required = min(sum(is_early(item) for item in items), (target + 1) // 2)
+    while sum(is_early(item) for item in selected) < required:
+        replacement = next(
+            (item for item in items if item not in selected and is_early(item)), None
+        )
+        removable = next((item for item in reversed(selected) if not is_early(item)), None)
+        if replacement is None or removable is None:
+            break
+        selected.remove(removable)
+        selected.append(replacement)
+    selected.sort(key=lambda row: (not row.invite_email_signal, -row.match_score, row.domain))
+    return selected
 
 
 def _isolated_cache_settings(cfg: Settings) -> Settings:

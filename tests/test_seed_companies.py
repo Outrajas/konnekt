@@ -4,6 +4,8 @@ import sqlite3
 
 from leadforge.config import Settings
 from leadforge.stages.seed_companies import (
+    SeedCompany,
+    _prefer_early_stage,
     parse_job_result_cards,
     parse_workatastartup_jobs,
     seed,
@@ -48,6 +50,33 @@ def test_workatastartup_structure_and_unrecognised_markup():
     unknown = parse_workatastartup_jobs(FICTIONAL_UNRECOGNISED)
     assert not unknown.recognized
     assert unknown.records == []
+
+
+def test_early_stage_mix_preserves_global_ranking_order():
+    rows = [
+        SeedCompany(
+            name=f"Fictional {index}",
+            domain=f"fictional{index}.invalid",
+            source="hn" if index < 8 else "yc-jobs",
+            role_title="Junior Engineer",
+            location="Remote",
+            job_url=f"https://fictional{index}.invalid/jobs/{index}",
+            invite_email_signal=index in {0, 8},
+            match_score=1.0 - index / 20,
+        )
+        for index in range(13)
+    ]
+    ranked = sorted(
+        rows,
+        key=lambda item: (not item.invite_email_signal, -item.match_score, item.domain),
+    )
+    selected = _prefer_early_stage(ranked, 8)
+    assert len(selected) == 8
+    assert sum(item.source == "yc-jobs" for item in selected) >= 4
+    assert selected == sorted(
+        selected,
+        key=lambda item: (not item.invite_email_signal, -item.match_score, item.domain),
+    )
 
 
 def test_dry_run_never_calls_fetcher_or_writes_outputs(tmp_path):
