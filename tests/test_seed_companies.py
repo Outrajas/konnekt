@@ -98,7 +98,11 @@ def test_dry_run_never_calls_fetcher_or_writes_outputs(tmp_path, capsys):
     assert companies == []
     assert stats["yc-jobs"].pages == 0
     assert not (cfg.input_dir / "companies.csv").exists()
-    assert "cap=" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "cap=" in output
+    assert "hacker-news" in output
+    assert "yc-jobs" not in output
+    assert "duckduckgo" in output
 
 
 def test_from_cache_reads_db_read_only_and_writes_only_replay_database(tmp_path):

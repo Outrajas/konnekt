@@ -251,14 +251,15 @@ def fetch(
 
     classification = classify_response(result.status or 0, {}, result.html)
     console.print(
-        f"status={result.status} tier={result.tier} classification={classification} "
+        f"final_url={result.final_url} status={result.status} tier={result.tier} "
+        f"blocked={classification in {'blocked', 'challenge', 'rate_limited'}} "
         f"from_cache={result.from_cache}"
     )
     if text:
         from bs4 import BeautifulSoup
 
         cleaned = " ".join(BeautifulSoup(result.html, "lxml").get_text(" ").split())
-        console.print(_terminal_safe_text(cleaned[:500]))
+        console.print(_terminal_safe_text(cleaned[:500]) if cleaned else "empty body")
 
 
 @app.command("import-pages")
@@ -302,10 +303,21 @@ def seed_companies(
     target: int = typer.Option(25, "--target", min=8, max=25),
     dry_run: bool = typer.Option(False, "--dry-run"),
     from_cache: bool = typer.Option(False, "--from-cache"),
+    sources: str = typer.Option("hn,ats,ddg", "--sources"),
+    max_minutes: float = typer.Option(20.0, "--max-minutes", min=0.1),
 ) -> None:
     """Seed matching companies from public hiring sources or the local page cache."""
     try:
-        companies, stats = seed_sync(target=target, dry_run=dry_run, from_cache=from_cache)
+        companies, stats = seed_sync(
+            target=target,
+            dry_run=dry_run,
+            from_cache=from_cache,
+            sources=sources.split(","),
+            max_minutes=max_minutes,
+        )
+    except KeyboardInterrupt:
+        console.print("Seeding stopped; completed source results were kept.")
+        return
     except Exception as exc:
         console.print(f"[red]Seed failed:[/] {type(exc).__name__}: {exc}")
         raise typer.Exit(code=1) from exc
