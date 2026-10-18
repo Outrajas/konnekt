@@ -136,6 +136,7 @@ async def test_budget_spacing_and_independent_host_locks(tmp_path) -> None:
     release_first.set()
     await pending
     assert now[0] == datetime(2026, 10, 15, 0, 0, 4, tzinfo=UTC)
+    assert not any(key[0] == id(asyncio.get_running_loop()) for key in Budget._locks)
 
 
 def test_default_policy_never_allows_tier_three() -> None:
