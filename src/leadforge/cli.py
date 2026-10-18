@@ -46,6 +46,7 @@ from leadforge.stages.import_pages import parse_saved_page, persist_import, save
 from leadforge.stages.pattern_learn import is_established, record_pattern_sample
 from leadforge.stages.profile import extract_profile, read_resume, save_profile
 from leadforge.stages.replay import ReplayFetcher
+from leadforge.stages.run_summary import export_run_summary
 from leadforge.stages.seed_companies import seed_sync
 from leadforge.stages.walk import FetchFn as WalkFetchFn
 from leadforge.stages.walk import WalkBudget, WalkResult, seed_urls, walk_person
@@ -1391,6 +1392,13 @@ def unpause_domain(host: str) -> None:
     finally:
         conn.close()
     console.print(f"Unpaused {host}" if cursor.rowcount else f"No pause recorded for {host}")
+
+
+@app.command("export-run-summary")
+def export_run_summary_command() -> None:
+    """Write aggregate run counts without names, emails, URLs, or page text."""
+    path = export_run_summary(settings)
+    console.print(f"Counts-only run summary written to {path}")
 
 
 @app.command("purge")
