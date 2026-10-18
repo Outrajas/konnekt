@@ -46,6 +46,7 @@ from leadforge.stages.import_pages import parse_saved_page, persist_import, save
 from leadforge.stages.pattern_learn import is_established, record_pattern_sample
 from leadforge.stages.profile import extract_profile, read_resume, save_profile
 from leadforge.stages.replay import ReplayFetcher
+from leadforge.stages.seed_companies import seed_sync
 from leadforge.stages.walk import FetchFn as WalkFetchFn
 from leadforge.stages.walk import WalkBudget, WalkResult, seed_urls, walk_person
 from leadforge.tools.smtp_verify import (
@@ -293,6 +294,40 @@ def import_pages(
         if delete_after:
             page.path.unlink()
     console.print(f"Imported {len(recognized)} of {len(pages)} saved pages")
+
+
+@app.command("seed-companies")
+def seed_companies(
+    target: int = typer.Option(25, "--target", min=8, max=25),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    from_cache: bool = typer.Option(False, "--from-cache"),
+) -> None:
+    """Seed matching companies from public hiring sources or the local page cache."""
+    try:
+        companies, stats = seed_sync(target=target, dry_run=dry_run, from_cache=from_cache)
+    except Exception as exc:
+        console.print(f"[red]Seed failed:[/] {type(exc).__name__}: {exc}")
+        raise typer.Exit(code=1) from exc
+    if dry_run:
+        return
+    if len(companies) < 8:
+        console.print("STOP: fewer than 8 companies passed the acceptance checks")
+        for source, item in stats.items():
+            console.print(
+                f"  {source}: pages={item.pages}, companies={item.companies}, "
+                f"blocks={item.blocks}, robots_refusals={item.robots_refusals}"
+            )
+        return
+    console.print(
+        f"Seeded {len(companies)} accepted companies (target {target}); "
+        "company rows and matching jobs were written"
+    )
+    for source, item in stats.items():
+        console.print(
+            f"  {source}: pages={item.pages}, companies={item.companies}, "
+            f"blocks={item.blocks}, robots_refusals={item.robots_refusals}, "
+            f"unrecognised={item.unrecognised}"
+        )
 
 
 @profile_app.command("ingest")
