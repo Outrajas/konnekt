@@ -43,7 +43,11 @@ packages = ["src/leadforge"]
 
 [tool.ruff]
 line-length = 100
-extend-exclude = ["docs/AGENT_BASELINE_PLAN.md", ".pytest_tmp_op"]
+extend-exclude = [
+    "docs/AGENT_BASELINE_PLAN.md",
+    ".pytest_tmp_op",
+    ".pytest_tmp_agent*",
+]
 target-version = "py312"
 
 [tool.ruff.lint]
