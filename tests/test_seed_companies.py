@@ -5,9 +5,13 @@ import sqlite3
 from leadforge.config import Settings
 from leadforge.stages.seed_companies import (
     SeedCompany,
+    _explicit_location,
     _prefer_early_stage,
     parse_job_result_cards,
+    parse_social_listing,
     parse_workatastartup_jobs,
+    parse_yc_companies,
+    parse_yc_jobs,
     seed,
 )
 
@@ -28,34 +32,26 @@ FICTIONAL_UNRECOGNISED = (
 )
 
 
-def test_known_semantic_job_cards_parse_without_guessing_domains():
-    parsed = parse_job_result_cards(FICTIONAL_YC, "linkedin")
-    assert parsed.recognized
-    assert parsed.records == [
-        {
-            "name": "Fable Systems",
-            "title": "Junior Analyst",
-            "location": "Remote - India",
-            "url": "https://jobs.example.com/fable/1",
-            "domain": "fable-systems.co.in",
-        }
+def test_sources_without_cached_markup_remain_unrecognised():
+    parsers = [
+        lambda: parse_yc_jobs(FICTIONAL_YC),
+        lambda: parse_yc_companies(FICTIONAL_YC),
+        lambda: parse_workatastartup_jobs(FICTIONAL_WAS),
+        lambda: parse_job_result_cards(FICTIONAL_YC, "wellfound"),
+        lambda: parse_job_result_cards(FICTIONAL_YC, "linkedin"),
+        lambda: parse_job_result_cards(FICTIONAL_YC, "glassdoor"),
+        lambda: parse_job_result_cards(FICTIONAL_YC, "indeed"),
+        lambda: parse_social_listing(FICTIONAL_UNRECOGNISED, "linkedin"),
     ]
+    for parse in parsers:
+        result = parse()
+        assert not result.recognized
+        assert result.records == []
 
 
-def test_parser_resolves_relative_posting_url_against_cached_page():
-    markup = FICTIONAL_YC.replace("https://jobs.example.com/fable/1", "/jobs/fixture-1")
-    parsed = parse_job_result_cards(markup, "linkedin", "https://www.linkedin.com/jobs/search/")
-    assert parsed.records[0]["url"] == "https://www.linkedin.com/jobs/fixture-1"
-
-
-def test_workatastartup_structure_and_unrecognised_markup():
-    parsed = parse_workatastartup_jobs(FICTIONAL_WAS)
-    assert parsed.recognized
-    assert parsed.records[0]["name"] == "Paper Kite"
-    assert parsed.records[0]["title"] == "Graduate Engineer"
-    unknown = parse_workatastartup_jobs(FICTIONAL_UNRECOGNISED)
-    assert not unknown.recognized
-    assert unknown.records == []
+def test_location_filter_uses_only_explicit_hn_location_signals():
+    assert _explicit_location("Junior engineer, remote in India") == "remote, India"
+    assert _explicit_location("Junior engineer, open to candidates") == ""
 
 
 def test_early_stage_mix_preserves_global_ranking_order():
@@ -133,6 +129,7 @@ def test_from_cache_reads_db_read_only_and_writes_only_replay_database(tmp_path)
     )
     _, stats = asyncio.run(seed(from_cache=True, active_settings=cfg, dns_resolver=lambda _: True))
     assert stats["yc-jobs"].pages == 1
+    assert stats["yc-jobs"].unrecognised == 1
     assert hashlib.sha256(db.read_bytes()).digest() == before
     assert (cache / "seed-replay.db").is_file() is False  # no accepted row, so no writes
     assert parse_workatastartup_jobs(FICTIONAL_UNRECOGNISED).recognized is False

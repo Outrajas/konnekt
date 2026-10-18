@@ -50,8 +50,8 @@
 
 ## Company seeding and run metrics
 
-- `seed-companies` uses the operator's source order. HTML parsing accepts explicit listing-card fields or supported JSON-LD job/organization records; unsupported markup is reported as unrecognised.
+- `seed-companies` uses the operator's source order. Existing HN API, ATS JSON, and approved DDG response parsers are reused. YC, Work at a Startup, and the four public job-platform HTML sources remain unrecognised-only until their real markup is available; unsupported markup is never guessed.
 - Every live page request in seeding uses the shared router and host policy. DNS and homepage validation are injectable for offline tests. Seeding accepts a registrable official domain only after DNS resolution and a homepage-name check, plus a matching early-career role or an explicit invitation email signal. It requires at least 8 accepted companies and ranks invite signals before match score while enforcing an early-stage mix when enough candidates exist.
-- `--from-cache` reads the page table with SQLite `mode=ro`; its company/job persistence targets `data/cache/seed-replay.db`, not the operator database. The cache database available during implementation contained zero page rows, so no real cached markup was available. Selector assumptions are documented in `SPEC_DELTA.md` and must be checked during the operator's first live run.
+- `--from-cache` reads the page table with SQLite `mode=ro`; its company/job persistence targets `data/cache/seed-replay.db`, not the operator database. The specified `data/cache/leadforge.db` contained zero page rows, so no real YC, Work at a Startup, or job-platform markup was available. Those sources remain unrecognised-only until their actual cached pages can be inspected.
 - `export-run-summary` aggregates fixed source labels and database counts through a read-only connection and writes counts only. Tests use fictional names, addresses, and a query URL and verify those values do not appear in the JSON.
 - No live discovery, search, SMTP check, LLM call, or mutation of the operator cache database was performed in this offline build.

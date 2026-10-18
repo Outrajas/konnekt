@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlsplit
 
 import tldextract
 from bs4 import BeautifulSoup
@@ -125,102 +125,22 @@ def _official_domain(url: str) -> str | None:
 
 
 def parse_yc_jobs(html: str, base_url: str = "") -> ParsedListing:
-    return _parse_cards(html, "yc-jobs", base_url)
+    return ParsedListing()
 
 
 def parse_yc_companies(html: str, base_url: str = "") -> ParsedListing:
-    return _parse_cards(html, "yc-companies", base_url)
+    return ParsedListing()
 
 
 def parse_workatastartup_jobs(html: str, base_url: str = "") -> ParsedListing:
-    return _parse_cards(html, "workatastartup", base_url)
+    return ParsedListing()
 
 
 def parse_job_result_cards(html: str, source: str, base_url: str = "") -> ParsedListing:
-    """Parse known semantic job cards; unsupported markup returns unrecognised."""
+    """Return unrecognised until platform markup is available in the operator cache."""
     if source not in {"wellfound", "linkedin", "glassdoor", "indeed"}:
         raise ValueError(f"Unsupported job-card source: {source}")
-    return _parse_cards(html, source, base_url)
-
-
-def _parse_cards(html: str, source: str, base_url: str = "") -> ParsedListing:
-    soup = BeautifulSoup(html, "lxml")
-    selectors = (
-        "article[data-job-id], [data-testid='job-card'], [data-testid='job-listing'], "
-        ".job-card, .job-listing, article[data-company], "
-        "[data-testid='company-card'], .company-card, .startup-card"
-    )
-    cards = soup.select(selectors)
-    # JSON-LD ItemList is a second explicit format used by public listings.
-    structured: list[dict] = []
-    for script in soup.select("script[type='application/ld+json']"):
-        try:
-            payload = json.loads(script.string or script.get_text())
-        except (json.JSONDecodeError, TypeError):
-            continue
-        nodes = payload.get("itemListElement", []) if isinstance(payload, dict) else []
-        for node in nodes if isinstance(nodes, list) else []:
-            item = node.get("item", node) if isinstance(node, dict) else {}
-            if isinstance(item, dict) and item.get("@type") in {"JobPosting", "Organization"}:
-                structured.append(item)
-    records: list[dict[str, str]] = []
-    for card in cards:
-        record = _card_record(card, base_url)
-        if record:
-            records.append(record)
-    for item in structured:
-        title = str(item.get("title") or item.get("name") or "").strip()
-        org = item.get("hiringOrganization") or item
-        name = str(org.get("name") or "").strip() if isinstance(org, dict) else ""
-        url = urljoin(base_url, str(item.get("url") or ""))
-        domain = _official_domain(str(org.get("url") or "")) or "" if isinstance(org, dict) else ""
-        location = item.get("jobLocation") or {}
-        if isinstance(location, list):
-            location = location[0] if location else {}
-        address = location.get("address", {}) if isinstance(location, dict) else {}
-        loc = " ".join(str(address.get(key) or "") for key in ("addressLocality", "addressCountry"))
-        if title and name and url.startswith(("http://", "https://")):
-            records.append(
-                {
-                    "name": name,
-                    "title": title,
-                    "location": loc.strip(),
-                    "url": url,
-                    "domain": domain,
-                }
-            )
-    return ParsedListing(records=records, recognized=bool(records))
-
-
-def _card_record(card, base_url: str = "") -> dict[str, str] | None:
-    def text(selector: str) -> str:
-        node = card.select_one(selector)
-        return " ".join(node.get_text(" ", strip=True).split()) if node else ""
-
-    name = str(card.get("data-company") or card.get("data-company-name") or "").strip()
-    if not name:
-        name = text(
-            "[data-company-name], .company-name, [itemprop='hiringOrganization'] [itemprop='name']"
-        )
-    title = str(card.get("data-title") or card.get("data-job-title") or "").strip() or text(
-        "[data-job-title], .job-title, h2, h3, [itemprop='title']"
-    )
-    location = str(card.get("data-location") or "").strip() or text(
-        "[data-location], .location, [itemprop='jobLocation']"
-    )
-    link = card.select_one("a[href]")
-    url = urljoin(base_url, str(link.get("href") or "")) if link else ""
-    domain = ""
-    for anchor in card.select(
-        "a[data-company-website], a[rel='external'], a[aria-label*='website' i]"
-    ):
-        candidate = _official_domain(str(anchor.get("href") or ""))
-        if candidate:
-            domain = candidate
-            break
-    if not (name and title and url.startswith(("http://", "https://"))):
-        return None
-    return {"name": name, "title": title, "location": location, "url": url, "domain": domain}
+    return ParsedListing()
 
 
 def parse_social_listing(html: str, source: str, base_url: str = "") -> ParsedListing:
@@ -267,6 +187,12 @@ async def _fetch_page(
 
 def _role_ok(title: str, location: str) -> bool:
     return bool(ENTRY.search(title) and GOOD_LOC.search(location))
+
+
+def _explicit_location(*values: str | None) -> str:
+    text = " ".join(value for value in values if value)
+    matches = list(dict.fromkeys(match.group(0) for match in GOOD_LOC.finditer(text)))
+    return ", ".join(matches)
 
 
 def _match_score(title: str, location: str, profile: OperatorProfile | None) -> float:
@@ -500,21 +426,19 @@ async def seed(
             )
         except Exception:
             hn_jobs = []
-        known = {c.name.casefold() for c in candidates}
         for job in hn_jobs:
-            if job.company.casefold() in known and (
-                _role_ok(job.title, job.location or "remote") or job.invites_email
-            ):
+            location = _explicit_location(job.location, job.description)
+            if location and (_role_ok(job.title, location) or job.invites_email):
                 candidates.append(
                     SeedCompany(
                         job.company,
                         job.domain,
                         "hacker-news",
                         job.title,
-                        job.location or "remote",
+                        location,
                         job.url,
                         job.invites_email,
-                        _match_score(job.title, job.location or "remote", profile),
+                        _match_score(job.title, location, profile),
                     )
                 )
 
@@ -600,13 +524,17 @@ async def seed(
         # resolves only those named companies and never becomes a discovery source.
         missing_domain = [item for item in candidates if not item.domain]
         if missing_domain:
-            search = DuckDuckGoProvider(fetcher=router)
+            ddg_router = _StatsFetcher(router, stats["duckduckgo"], unavailable_hosts)
+            search = DuckDuckGoProvider(fetcher=ddg_router)
             for candidate in missing_domain:
+                if "html.duckduckgo.com" in unavailable_hosts:
+                    break
                 try:
                     hits = await search.search(f"{candidate.name} official website")
-                    stats["duckduckgo"].pages += 1
-                except (Blocked, BudgetExhausted, DomainPaused, FetchError, ValueError):
-                    stats["duckduckgo"].blocks += 1
+                except ValueError:
+                    stats["duckduckgo"].unrecognised += 1
+                    continue
+                except (Blocked, BudgetExhausted, DomainPaused, FetchError):
                     continue
                 for hit in hits:
                     resolved = _official_domain(hit.url)
