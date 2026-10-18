@@ -33,6 +33,17 @@ discovery, people search, walk, and enrichment also require the operator's
 with each command's `--dry-run` option. All web requests go through the policy
 router; no command sends email.
 
+To seed a candidate company file from the approved public hiring sources, review
+the request plan with `leadforge seed-companies --dry-run`, then run
+`leadforge seed-companies`. At least 8 companies must pass the official-domain,
+DNS, homepage, hiring-signal, role, and deduplication checks.
+`leadforge run-daily --seed` can seed first when the companies file is missing
+or empty. See [docs/LIVE_RUN.md](docs/LIVE_RUN.md) for the operator's full
+PowerShell sequence and host-stop behavior.
+
+`leadforge export-run-summary` writes only aggregate counts to
+`data/output/run_summary.json`; it excludes names, emails, URLs, and page text.
+
 For optional live people search, configure `LEADFORGE_SEARXNG_BASE_URL` to use
 local SearxNG; otherwise the logged-out DuckDuckGo adapter parses search
 snippets through the policy router. Search result URLs are never fetched.

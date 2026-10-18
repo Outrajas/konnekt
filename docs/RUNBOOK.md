@@ -109,6 +109,23 @@ records and cache files can be removed with `leadforge purge --older-than 30`;
 reviewing a block reason, clear a host pause with `leadforge domains unpause
 <host>`.
 
+## Company seeding and daily pipeline
+
+Use `leadforge seed-companies --dry-run` to inspect the ordered source plan and
+policy caps without making requests. Then run `leadforge seed-companies` to
+build `data/input/companies.csv` and its ignored metadata file from approved
+hiring sources. At least 8 companies must pass the official-domain, DNS,
+homepage-name, hiring-signal, role/location, deduplication, and agency checks.
+If fewer than 8 pass, seeding stops without replacing the companies file and
+prints per-source counts. When 8–14 pass, the documented fallback allows
+continuing with that set.
+
+`leadforge run-daily --seed` seeds first only when `companies.csv` is missing
+or has no company rows. The normal daily stages are discover, people, enrich,
+then report. `--dry-run` previews the work. Use
+`leadforge export-run-summary` to write the counts-only JSON summary. Follow
+[LIVE_RUN.md](LIVE_RUN.md) for the full command order and stop/block meanings.
+
 ## Tier benchmark
 
 Create `data/input/benchmark_domains.txt` with operator-approved domains, one

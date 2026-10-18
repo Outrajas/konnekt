@@ -42,6 +42,12 @@ def test_known_semantic_job_cards_parse_without_guessing_domains():
     ]
 
 
+def test_parser_resolves_relative_posting_url_against_cached_page():
+    markup = FICTIONAL_YC.replace("https://jobs.example.com/fable/1", "/jobs/fixture-1")
+    parsed = parse_job_result_cards(markup, "linkedin", "https://www.linkedin.com/jobs/search/")
+    assert parsed.records[0]["url"] == "https://www.linkedin.com/jobs/fixture-1"
+
+
 def test_workatastartup_structure_and_unrecognised_markup():
     parsed = parse_workatastartup_jobs(FICTIONAL_WAS)
     assert parsed.recognized
@@ -79,7 +85,7 @@ def test_early_stage_mix_preserves_global_ranking_order():
     )
 
 
-def test_dry_run_never_calls_fetcher_or_writes_outputs(tmp_path):
+def test_dry_run_never_calls_fetcher_or_writes_outputs(tmp_path, capsys):
     cfg = Settings(
         data_dir=tmp_path / "data",
         input_dir=tmp_path / "input",
@@ -96,6 +102,7 @@ def test_dry_run_never_calls_fetcher_or_writes_outputs(tmp_path):
     assert companies == []
     assert stats["yc-jobs"].pages == 0
     assert not (cfg.input_dir / "companies.csv").exists()
+    assert "cap=" in capsys.readouterr().out
 
 
 def test_from_cache_reads_db_read_only_and_writes_only_replay_database(tmp_path):

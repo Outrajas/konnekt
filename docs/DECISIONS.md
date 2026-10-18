@@ -47,3 +47,11 @@
 - Live discovery, people search, walk, and enrichment require the operator's companies CSV and an ingested resume profile. Replay modes remain offline and do not require a real SMTP identity or LLM key.
 - The sample enrichment fixture demonstrates a published Tier-A address at `.invalid`; it stays below the 0.40 send threshold, so the enriched output shows it as `unknown` and the review file remains empty. Drafts are manual-personalization markers unless professional project evidence exists.
 - The tier benchmark is implemented with a no-request `--dry-run` mode. No live benchmark was run because the operator domain list is absent.
+
+## Company seeding and run metrics
+
+- `seed-companies` uses the operator's source order. HTML parsing accepts explicit listing-card fields or supported JSON-LD job/organization records; unsupported markup is reported as unrecognised.
+- Every live page request in seeding uses the shared router and host policy. DNS and homepage validation are injectable for offline tests. Seeding accepts a registrable official domain only after DNS resolution and a homepage-name check, plus a matching early-career role or an explicit invitation email signal. It requires at least 8 accepted companies and ranks invite signals before match score while enforcing an early-stage mix when enough candidates exist.
+- `--from-cache` reads the page table with SQLite `mode=ro`; its company/job persistence targets `data/cache/seed-replay.db`, not the operator database. The cache database available during implementation contained zero page rows, so no real cached markup was available. Selector assumptions are documented in `SPEC_DELTA.md` and must be checked during the operator's first live run.
+- `export-run-summary` aggregates fixed source labels and database counts through a read-only connection and writes counts only. Tests use fictional names, addresses, and a query URL and verify those values do not appear in the JSON.
+- No live discovery, search, SMTP check, LLM call, or mutation of the operator cache database was performed in this offline build.
