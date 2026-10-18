@@ -12,6 +12,7 @@ import json
 import re
 import socket
 import sqlite3
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -80,6 +81,9 @@ class SourceStats:
     blocks: int = 0
     robots_refusals: int = 0
     unrecognised: int = 0
+    requests: int = 0
+    waits: int = 0
+    elapsed: float = 0.0
 
 
 class _StatsFetcher(Fetcher):
@@ -92,6 +96,7 @@ class _StatsFetcher(Fetcher):
 
     async def fetch(self, url: str, *args, **kwargs):
         host = (urlsplit(url).hostname or "").lower()
+        self.stats.requests += 1
         if host in self.unavailable_hosts:
             raise DomainPaused(f"{host} unavailable for this run")
         try:
@@ -279,9 +284,30 @@ async def seed(
     dns_resolver: Callable[[str], bool] | None = None,
     homepage_check: Callable[[str, str], bool] | None = None,
     profile: OperatorProfile | None = None,
+    sources: list[str] | None = None,
+    max_minutes: float = 20.0,
 ) -> tuple[list[SeedCompany], dict[str, SourceStats]]:
     """Run source order under the shared router; dependencies can be faked offline."""
     cfg = active_settings or settings
+    selected_sources = [item.strip().lower() for item in (sources or ["hn", "ats", "ddg"])]
+    aliases = {"hn": "hacker-news", "ddg": "duckduckgo"}
+    selected_sources = [aliases.get(item, item) for item in selected_sources]
+    allowed_sources = {
+        "hacker-news",
+        "ats",
+        "duckduckgo",
+        "yc-jobs",
+        "yc-companies",
+        "workatastartup",
+        "wellfound",
+        "linkedin",
+        "glassdoor",
+        "indeed",
+    }
+    unknown_sources = set(selected_sources) - allowed_sources
+    if unknown_sources:
+        raise ValueError(f"Unknown seed source(s): {', '.join(sorted(unknown_sources))}")
+    deadline = time.monotonic() + max_minutes * 60
     router = fetcher or Fetcher(cfg)
     resolve = dns_resolver or _dns_resolves
     if profile is None:
@@ -337,7 +363,11 @@ async def seed(
             "duckduckgo": "html.duckduckgo.com",
         }
         print("Seed fetch plan (no requests made):")
+        visible = {"hn": "hacker-news", "ddg": "duckduckgo"}
         for source, item in plan:
+            source = visible.get(source, source)
+            if source not in selected_sources:
+                continue
             rule = policy.resolve(hosts[source])
             print(
                 f"  {source}: {item}; cap={rule.daily_cap}/day, max_tier={rule.max_tier}, "
@@ -349,6 +379,12 @@ async def seed(
         raise ValueError("target must be between 8 and 25")
 
     candidates: list[SeedCompany] = []
+    output_name = (
+        "companies.seeded.csv" if (cfg.input_dir / "companies.csv").exists() else "companies.csv"
+    )
+    meta_name = (
+        "companies.seeded_meta.csv" if output_name != "companies.csv" else "companies_meta.csv"
+    )
     if from_cache:
         for host, path, html, status, blocked in _load_cached_pages(cfg):
             source = (
@@ -392,12 +428,44 @@ async def seed(
                         )
     else:
         unavailable_hosts: set[str] = set()
+        if output_name != "companies.csv":
+            print(
+                "companies.csv exists; writing companies.seeded.csv and companies.seeded_meta.csv"
+            )
+        source_started: dict[str, float] = {}
+        request_hosts: dict[str, set[str]] = {}
+
+        def progress(source: str, found: int = 0) -> None:
+            stat = stats[source]
+            stat.companies = found
+            stat.elapsed = time.monotonic() - source_started.get(source, time.monotonic())
+            print(
+                f"{source}: requests={stat.requests} companies_found={found} "
+                f"elapsed={stat.elapsed:.1f}s waits={stat.waits}"
+            )
+
+        def persist_partial() -> None:
+            ranked = sorted(
+                candidates,
+                key=lambda row: (not row.invite_email_signal, -row.match_score, row.domain),
+            )
+            accepted_partial = [row for row in ranked if row.domain][:target]
+            _write_outputs(accepted_partial, cfg, target, csv_name=output_name, meta_name=meta_name)
+
         first_sources = [
             ("yc-jobs", "https://www.ycombinator.com/jobs", parse_yc_jobs),
             ("yc-companies", "https://www.ycombinator.com/companies", parse_yc_companies),
             ("workatastartup", "https://www.workatastartup.com/jobs", parse_workatastartup_jobs),
         ]
         for source, url, parser in first_sources:
+            if source not in selected_sources:
+                print(
+                    f"{source}: skipped (parser unrecognised-only; name it in --sources to enable)"
+                )
+                continue
+            source_started[source] = time.monotonic()
+            request_hosts[source] = set()
+            stats[source].requests += 1
             page = await _fetch_page(
                 router, url, stats[source], unavailable_hosts=unavailable_hosts
             )
@@ -419,11 +487,19 @@ async def seed(
                             match_score=_match_score(row["title"], row["location"], profile),
                         )
                     )
+            persist_partial()
+            progress(source, len([c for c in candidates if c.source == source]))
+        if "hacker-news" in selected_sources:
+            source_started["hacker-news"] = time.monotonic()
         try:
+            if "hacker-news" not in selected_sources or time.monotonic() >= deadline:
+                raise StopAsyncIteration
             hn_router = _StatsFetcher(router, stats["hacker-news"], unavailable_hosts)
             hn_jobs = await discover_hiring_posts(
                 fetcher=hn_router, max_stories=20, max_comments=60
             )
+        except StopAsyncIteration:
+            hn_jobs = []
         except Exception:
             hn_jobs = []
         for job in hn_jobs:
@@ -441,6 +517,9 @@ async def seed(
                         _match_score(job.title, location, profile),
                     )
                 )
+        if "hacker-news" in selected_sources:
+            persist_partial()
+            progress("hacker-news", len([c for c in candidates if c.source == "hacker-news"]))
 
         # One result/listing request per approved job platform, after source one and HN.
         platform_urls = {
@@ -453,6 +532,15 @@ async def seed(
             "indeed": ("https://www.indeed.com/jobs?q=intern+junior", "job"),
         }
         for source, (url, purpose) in platform_urls.items():
+            if source not in selected_sources:
+                print(
+                    f"{source}: skipped (parser unrecognised-only; name it in --sources to enable)"
+                )
+                continue
+            if time.monotonic() >= deadline:
+                break
+            source_started[source] = time.monotonic()
+            stats[source].requests += 1
             page = await _fetch_page(
                 router,
                 url,
@@ -478,11 +566,17 @@ async def seed(
                             match_score=_match_score(row["title"], row["location"], profile),
                         )
                     )
+            persist_partial()
+            progress(source, len([c for c in candidates if c.source == source]))
 
         # Inspect only already-discovered official homepages for ATS links. The
         # homepage request itself is routed and bounded by the host's policy.
         seen_domains = {candidate.domain for candidate in candidates if candidate.domain}
-        for candidate_domain in list(seen_domains):
+        if "ats" not in selected_sources:
+            print("ats: skipped (not named in --sources)")
+        elif time.monotonic() < deadline:
+            source_started["ats"] = time.monotonic()
+        for candidate_domain in list(seen_domains) if "ats" in selected_sources else []:
             seed_candidate = next(
                 (item for item in candidates if item.domain == candidate_domain), None
             )
@@ -500,6 +594,7 @@ async def seed(
             ats = detect_ats_link([link.url for link in links])
             if ats:
                 try:
+                    stats["ats"].requests += 1
                     ats_router = _StatsFetcher(router, stats["ats"], unavailable_hosts)
                     board_jobs = await fetch_jobs(
                         ats[0], ats[1], seed_candidate.name, candidate_domain, fetcher=ats_router
@@ -519,11 +614,14 @@ async def seed(
                                 match_score=_match_score(job.title, job.location or "", profile),
                             )
                         )
+            persist_partial()
+        if "ats" in selected_sources:
+            progress("ats", len([c for c in candidates if c.source == "ats"]))
 
         # HN comments may name a new employer but omit its official domain. DDG
         # resolves only those named companies and never becomes a discovery source.
         missing_domain = [item for item in candidates if not item.domain]
-        if missing_domain:
+        if missing_domain and "duckduckgo" in selected_sources:
             ddg_router = _StatsFetcher(router, stats["duckduckgo"], unavailable_hosts)
             search = DuckDuckGoProvider(fetcher=ddg_router)
             for candidate in missing_domain:
@@ -541,6 +639,8 @@ async def seed(
                     if resolved and candidate.name.casefold() in hit.title.casefold():
                         candidate.domain = resolved
                         break
+        if "duckduckgo" in selected_sources:
+            progress("duckduckgo", len([c for c in candidates if c.source == "duckduckgo"]))
 
     # Conservative acceptance: the domain must resolve and an operator-provided
     # homepage checker must confirm the name. Missing checks reject, never guess.
@@ -596,12 +696,18 @@ async def seed(
         for key, stat in stats.items():
             stat.companies = len({c.domain for c in accepted if c.source == key})
         _write_source_stats(cfg.cache_dir / "seed-source-stats.json", stats)
-        return [], stats
+        return accepted, stats
     if from_cache:
         output_cfg = _isolated_cache_settings(cfg)
     else:
         output_cfg = cfg
-    _write_outputs(accepted, output_cfg, target)
+    _write_outputs(
+        accepted,
+        output_cfg,
+        target,
+        csv_name=output_name if not from_cache else "companies.csv",
+        meta_name=meta_name if not from_cache else "companies_meta.csv",
+    )
     if accepted:
         _persist_jobs(accepted, output_cfg)
     for key, stat in stats.items():
@@ -639,14 +745,21 @@ def _isolated_cache_settings(cfg: Settings) -> Settings:
     return cfg.model_copy(update={"db_path": cfg.cache_dir / "seed-replay.db"})
 
 
-def _write_outputs(items: list[SeedCompany], cfg: Settings, target: int) -> None:
+def _write_outputs(
+    items: list[SeedCompany],
+    cfg: Settings,
+    target: int,
+    *,
+    csv_name: str = "companies.csv",
+    meta_name: str = "companies_meta.csv",
+) -> None:
     cfg.input_dir.mkdir(parents=True, exist_ok=True)
-    with (cfg.input_dir / "companies.csv").open("w", encoding="utf-8", newline="") as handle:
+    with (cfg.input_dir / csv_name).open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["name", "domain"])
         for item in items[:target]:
             writer.writerow([item.name, item.domain.lower()])
-    with (cfg.input_dir / "companies_meta.csv").open("w", encoding="utf-8", newline="") as handle:
+    with (cfg.input_dir / meta_name).open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(
             [
