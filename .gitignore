@@ -50,3 +50,6 @@ Thumbs.db
 .pytest_tmp_agent/
 .pytest_tmp_agent_*/
 .pytest_tmp_op/
+
+# .env backups (contain secrets)
+.env.bak.*

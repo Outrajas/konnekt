@@ -2,14 +2,23 @@
 scripts/check_pipeline.ps1
 Single cumulative pipeline check -- runs the entire timeline.
 
-Covers: python, CLI, imports, SMTP config, pytest, ruff, mypy,
-tracked-file hygiene, offline replay, profiles schema.
-
-Run after every code change. Exit code 0 = everything green.
+Checks (12):
+   1. python
+   2. leadforge CLI
+   3. imports
+   4. SMTP config
+   5. .env.example present
+   6. pytest
+   7. ruff check
+   8. mypy
+   9. tracked-file hygiene
+  10. offline replay end-to-end
+  11. profiles schema
+  12. profile CLI (list + show, list runs)
 
 Usage:
   .\scripts\check_pipeline.ps1
-  .\scripts\check_pipeline.ps1 -Quick   # static checks only, no tests/replay
+  .\scripts\check_pipeline.ps1 -Quick
 #>
 param(
     [switch]$Quick
@@ -87,8 +96,12 @@ if (Test-Path ".env") {
 }
 Add-Check "SMTP config" $envOk $envDetail
 
+# 5. .env.example present
+if (Test-Path ".env.example") { Add-Check ".env.example present" $true "" }
+else                          { Add-Check ".env.example present" $false "missing (git restore .env.example)" }
+
 if (-not $Quick) {
-    # 5. pytest -- exit code is definitive
+    # 6. pytest
     $pytestLog = ".diag\pytest_last.log"
     & $py -m pytest -q --tb=line -p no:cacheprovider 2>&1 | Out-File -FilePath $pytestLog -Encoding utf8
     $pytestExit = $LASTEXITCODE
@@ -111,7 +124,7 @@ if (-not $Quick) {
         ($pytestOut -split "`r?`n") | Where-Object { $_ -match '(FAILED|ERROR|Traceback)' } | Select-Object -First 10 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkRed }
     }
 
-    # 6. ruff
+    # 7. ruff
     $ruffOut = & $py -m ruff check src tests 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) { Add-Check "ruff check" $true "" }
     else {
@@ -119,12 +132,12 @@ if (-not $Quick) {
         ($ruffOut -split "`r?`n") | Select-Object -First 8 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkRed }
     }
 
-    # 7. mypy
+    # 8. mypy
     $mypyOut = & $py -m mypy src/leadforge 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) { Add-Check "mypy" $true "" }
     else                     { Add-Check "mypy" $false "type issues (non-blocking)" }
 
-    # 8. tracked-file hygiene
+    # 9. tracked-file hygiene
     $hygiene = "scripts\check_tracked_files.py"
     if (Test-Path $hygiene) {
         $hOut = & $py $hygiene 2>&1 | Out-String
@@ -135,7 +148,7 @@ if (-not $Quick) {
         }
     }
 
-    # 9. Offline replay end-to-end
+    # 10. Offline replay end-to-end
     $replayFixtures = "data/fixtures/sample"
     $replayContacts = "tests/fixtures/sample_contacts.csv"
     if ((Test-Path $replayFixtures) -and (Test-Path $replayContacts)) {
@@ -150,18 +163,34 @@ if (-not $Quick) {
         Add-Check "offline replay" $false "fixtures missing"
     }
 
-    # 10. Profiles schema + module
+    # 11. Profiles schema
     $checkProfiles = "scripts\check_profiles.py"
     if (Test-Path $checkProfiles) {
         $cpOut = (& $py $checkProfiles 2>&1 | Out-String).Trim()
         if ($cpOut -like "SKIP:*") {
             Add-Check "profiles schema" $true ($cpOut -replace "^SKIP:\s*", "")
         } elseif ($cpOut -like "OK*") {
-            $firstLine = (($cpOut -split "`r?`n") | Select-Object -First 1)
-            Add-Check "profiles schema" $true $firstLine
+            Add-Check "profiles schema" $true "OK"
         } else {
             Add-Check "profiles schema" $false "see detail"
             ($cpOut -split "`r?`n") | Select-Object -First 8 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkRed }
+        }
+    }
+
+    # 12. Profile CLI
+    if (Test-Path $lf) {
+        $helpOut = & $lf profile --help 2>&1 | Out-String
+        $hasList = $helpOut -match '\blist\b'
+        $hasShow = $helpOut -match '\bshow\b'
+        if ($hasList -and $hasShow) {
+            & $lf profile list 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Add-Check "profile CLI" $true "list + show available, list runs"
+            } else {
+                Add-Check "profile CLI" $false "list runs with exit $LASTEXITCODE"
+            }
+        } else {
+            Add-Check "profile CLI" $false "missing (list=$hasList, show=$hasShow)"
         }
     }
 } else {
