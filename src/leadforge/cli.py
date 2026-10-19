@@ -282,7 +282,7 @@ def import_pages(
         return
     recognized = [page for page in pages if page.status == "recognized"]
     for page in pages:
-        console.print(f"{page.path.name}: {page.kind} — {page.status}")
+        console.print(f"{page.path.name}: {page.kind} Ã¢â‚¬â€ {page.status}")
         for field_name, value in page.evidence:
             console.print(f"  {field_name}: {value}")
     if dry_run:
@@ -355,6 +355,87 @@ def profile_ingest(resume: Path) -> None:
     console.print(output_path.read_text(encoding="utf-8"))
 
 
+@profile_app.command("list")
+def profile_list() -> None:
+    """List all operator profiles."""
+    import sqlite3
+    from pathlib import Path as _Path
+
+    from leadforge import profiles as _profiles
+
+    db_path = _Path("data/cache/leadforge.db")
+    if not db_path.exists():
+        typer.echo("no database; run 'leadforge init-db' first", err=True)
+        raise typer.Exit(code=1)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _profiles.ensure_schema(conn)
+        profiles = _profiles.list_profiles(conn)
+        if not profiles:
+            typer.echo(
+                "no profiles yet. Ingest one: "
+                "leadforge profile ingest <resume> --track <track>"
+            )
+            return
+        for p in profiles:
+            typer.echo(
+                f"{p.profile_id:<16}  track={p.track:<12}  "
+                f"titles={len(p.target_titles):<2}  "
+                f"skills={len(p.skills):<2}  "
+                f"localities={len(p.localities):<2}"
+            )
+    finally:
+        conn.close()
+
+
+@profile_app.command("show")
+def profile_show(
+    track: str = typer.Argument(..., help="profile_id or track alias"),
+) -> None:
+    """Show a specific profile's full contents."""
+    import sqlite3
+    from pathlib import Path as _Path
+
+    from leadforge import profiles as _profiles
+
+    db_path = _Path("data/cache/leadforge.db")
+    if not db_path.exists():
+        typer.echo("no database; run 'leadforge init-db' first", err=True)
+        raise typer.Exit(code=1)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _profiles.ensure_schema(conn)
+        try:
+            profile_id = _profiles.resolve_profile_arg(conn, track)
+        except ValueError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(code=1) from None
+        p = _profiles.get_profile(conn, profile_id)
+        if p is None:
+            typer.echo(f"error: profile '{track}' not found", err=True)
+            raise typer.Exit(code=1)
+        typer.echo(f"profile_id:       {p.profile_id}")
+        typer.echo(f"track:            {p.track}")
+        typer.echo(f"seniority:        {p.seniority}")
+        if p.years_experience is not None:
+            typer.echo(f"years_experience: {p.years_experience}")
+        typer.echo(f"resume_path:      {p.resume_path or '(none)'}")
+        typer.echo(f"skills:           {', '.join(p.skills) if p.skills else '(none)'}")
+        titles = ", ".join(p.target_titles) if p.target_titles else "(none)"
+        typer.echo(f"target_titles:    {titles}")
+        typer.echo(f"localities:       {', '.join(p.localities) if p.localities else '(none)'}")
+        if p.notes:
+            typer.echo(f"notes:            {p.notes}")
+        typer.echo(f"created_at:       {p.created_at}")
+        typer.echo(f"updated_at:       {p.updated_at}")
+    finally:
+        conn.close()
+
+
 @app.command("discover")
 def discover(
     companies: Annotated[Path, typer.Option(..., "--companies", exists=True, dir_okay=False)],
@@ -399,7 +480,7 @@ def discover(
     persist_invite_signals(jobs, settings)
     output_path = settings.output_dir / "discovered_jobs.csv"
     save_jobs(jobs, output_path)
-    console.print(f"Discovered {len(jobs)} jobs → {output_path}")
+    console.print(f"Discovered {len(jobs)} jobs Ã¢â€ â€™ {output_path}")
 
 
 @app.command("people")
@@ -1545,7 +1626,7 @@ async def _verify_csv(csv_path: Path) -> None:
     for result in results:
         verdict = result.verification_verdict.value
         counts[verdict] = counts.get(verdict, 0) + 1
-    console.print(f"Verified {len(results)} candidates → {output_path}")
+    console.print(f"Verified {len(results)} candidates Ã¢â€ â€™ {output_path}")
     for verdict, count in sorted(counts.items()):
         console.print(f"  {verdict}: {count}")
     console.print(f"  catch-all: {sum(result.catch_all_domain is True for result in results)}")
@@ -1748,7 +1829,7 @@ def today() -> None:
     console.print(f"Today's list: {len(eligible)} of {remaining} available; ramp cap {used}/{cap}")
     for row in eligible:
         console.print(
-            f"  person_id={row['id']} {row['first_name']} {row['last_name']} — "
+            f"  person_id={row['id']} {row['first_name']} {row['last_name']} Ã¢â‚¬â€ "
             f"{row['title'] or 'role unknown'} at {row['company']} ({row['email']})"
         )
 
