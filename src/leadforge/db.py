@@ -170,6 +170,35 @@ def _migration_add_job_intel_columns(conn: sqlite3.Connection) -> None:
 MIGRATIONS.append(_migration_add_job_intel_columns)
 
 
+def _migration_add_profile_id_columns(conn: sqlite3.Connection) -> None:
+    """Add profile_id to per-profile tables. Idempotent.
+
+    Mirrors the columns that profiles.ensure_schema overlays on the live DB,
+    but registers them as a formal migration so a fresh init-db is complete.
+    """
+    for table in (
+        "company",
+        "job",
+        "person",
+        "email_candidate",
+        "outreach",
+        "run_log",
+    ):
+        cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if cols and "profile_id" not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN profile_id TEXT")
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{table}_profile ON {table}(profile_id)"
+            )
+            conn.execute(
+                f"UPDATE {table} SET profile_id='default' WHERE profile_id IS NULL"
+            )
+    conn.commit()
+
+
+MIGRATIONS.append(_migration_add_profile_id_columns)
+
+
 def connect(path: str | Path) -> sqlite3.Connection:
     """Open a SQLite database with WAL and foreign-key enforcement enabled."""
     database_path = str(path)

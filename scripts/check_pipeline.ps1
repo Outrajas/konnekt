@@ -243,7 +243,19 @@ if (-not $Quick) {
         }
     }
 
-# Summaryost ""
+    # 17. job pipeline (persist + enrich + reputation)
+    $checkJobPipeline = "scripts\check_job_pipeline.py"
+    if (Test-Path $checkJobPipeline) {
+        $jpOut = (& $py $checkJobPipeline 2>&1 | Out-String).Trim()
+        if ($jpOut -like "OK*") {
+            Add-Check "job pipeline" $true "persist+enrich+reputation"
+        } else {
+            Add-Check "job pipeline" $false "see detail"
+            ($jpOut -split "`r?`n") | Select-Object -First 8 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkRed }
+        }
+    }
+
+# Summaryt ""
 $pass  = @($script:Checks | Where-Object { $_.Pass }).Count
 $fail  = @($script:Checks | Where-Object { -not $_.Pass }).Count
 $total = $pass + $fail

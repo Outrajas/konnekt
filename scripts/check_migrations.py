@@ -18,7 +18,7 @@ from leadforge.db import MIGRATIONS, connect, init_schema, schema_version  # noq
 
 _REQUIRED_JOB_COLUMNS = (
     "id", "company_id", "title", "url", "location", "employment_type",
-    "source", "match_score", "first_seen", "last_seen",
+    "source", "match_score", "first_seen", "last_seen", "profile_id",
     "description", "salary_min", "salary_max", "salary_currency",
     "salary_period", "salary_source", "tech_stack_json",
     "reputation_score", "reputation_signals_json", "enriched_at",
@@ -41,6 +41,10 @@ def main() -> int:
             missing = [c for c in _REQUIRED_JOB_COLUMNS if c not in job_cols]
             if missing:
                 failures.append(f"fresh DB missing job columns: {missing}")
+
+            company_cols = {row[1] for row in conn.execute("PRAGMA table_info(company)").fetchall()}
+            if "profile_id" not in company_cols:
+                failures.append("fresh DB missing company.profile_id")
 
             # Idempotency: run again, expect no error and no version change
             try:

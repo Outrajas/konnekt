@@ -73,3 +73,20 @@ def test_all_migrations_are_str_or_callable():
         assert isinstance(m, str) or callable(m), (
             f"migration {i} is {type(m).__name__}, expected str or callable"
         )
+def test_fresh_db_has_profile_id_columns(temp_db):
+    """profile_id must exist on all per-profile tables in a fresh DB."""
+    conn = connect(temp_db)
+    try:
+        init_schema(conn)
+        for table in (
+            "company",
+            "job",
+            "person",
+            "email_candidate",
+            "outreach",
+            "run_log",
+        ):
+            cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            assert "profile_id" in cols, f"{table}.profile_id missing"
+    finally:
+        conn.close()
