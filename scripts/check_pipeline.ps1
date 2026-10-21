@@ -217,7 +217,21 @@ if (-not $Quick) {
         }
     }
 
-# Summaryte-Host ""
+    # 15. job intel (extraction + schema)
+    $checkJobIntel = "scripts\check_job_intel.py"
+    if (Test-Path $checkJobIntel) {
+        $jiOut = (& $py $checkJobIntel 2>&1 | Out-String).Trim()
+        if ($jiOut -like "SKIP:*") {
+            Add-Check "job intel" $true ($jiOut -replace "^SKIP:\s*", "")
+        } elseif ($jiOut -like "OK*") {
+            Add-Check "job intel" $true "OK"
+        } else {
+            Add-Check "job intel" $false "see detail"
+            ($jiOut -split "`r?`n") | Select-Object -First 8 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkRed }
+        }
+    }
+
+# Summary-Host ""
 $pass  = @($script:Checks | Where-Object { $_.Pass }).Count
 $fail  = @($script:Checks | Where-Object { -not $_.Pass }).Count
 $total = $pass + $fail
