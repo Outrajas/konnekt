@@ -282,7 +282,7 @@ def import_pages(
         return
     recognized = [page for page in pages if page.status == "recognized"]
     for page in pages:
-        console.print(f"{page.path.name}: {page.kind} Ã¢â‚¬â€ {page.status}")
+        console.print(f"{page.path.name}: {page.kind} -> {page.status}")
         for field_name, value in page.evidence:
             console.print(f"  {field_name}: {value}")
     if dry_run:
@@ -344,16 +344,64 @@ def seed_companies(
 
 
 @profile_app.command("ingest")
-def profile_ingest(resume: Path) -> None:
+def profile_ingest(
+    resume: Path,
+    track: str = typer.Option(
+        None,
+        "--track",
+        help="Profile track (data_analyst, swe, ai_ml). Also persists to the profiles table.",
+    ),
+) -> None:
     """Extract a deterministic, editable profile from a resume document."""
     if not resume.is_file():
         console.print(f"[red]Resume not found:[/] {resume}")
         raise typer.Exit(code=2)
     profile = extract_profile(read_resume(resume))
+    if track:
+        from leadforge.stages.profile import apply_track_defaults
+        profile = apply_track_defaults(profile, track)
     output_path = settings.data_dir / "profile.json"
     save_profile(profile, output_path)
     console.print(output_path.read_text(encoding="utf-8"))
+    if track:
+        _persist_profile_row(track, resume, profile)
 
+
+def _persist_profile_row(track: str, resume: Path, profile: OperatorProfile) -> None:
+    """Persist a profiles-table row for this track (idempotent per track)."""
+    import sqlite3
+
+    from leadforge import profiles as _profiles
+
+    db_path = settings.data_dir / "cache" / "leadforge.db"
+    if not db_path.exists():
+        console.print(
+            f"[yellow]warning:[/] database missing at {db_path}; "
+            f"profile '{track}' was written to data/profile.json only. "
+            f"Run 'leadforge init-db' then re-run with --track."
+        )
+        return
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _profiles.ensure_schema(conn)
+        row = _profiles.Profile(
+            profile_id=track,
+            track=track,
+            resume_path=str(resume),
+            resume_sha256=_profiles.resume_sha256(resume),
+            skills=list(profile.skills),
+            target_titles=list(profile.target_titles),
+            localities=list(getattr(profile, "location_preferences", [])),
+        )
+        saved = _profiles.upsert_profile(conn, row)
+        console.print(
+            f"[green]saved profile:[/] profile_id={saved.profile_id} "
+            f"track={saved.track} skills={len(saved.skills)} "
+            f"titles={len(saved.target_titles)}"
+        )
+    finally:
+        conn.close()
 
 @profile_app.command("list")
 def profile_list() -> None:
@@ -480,7 +528,7 @@ def discover(
     persist_invite_signals(jobs, settings)
     output_path = settings.output_dir / "discovered_jobs.csv"
     save_jobs(jobs, output_path)
-    console.print(f"Discovered {len(jobs)} jobs Ã¢â€ â€™ {output_path}")
+    console.print(f"Discovered {len(jobs)} jobs -> {output_path}")
 
 
 @app.command("people")
@@ -1626,7 +1674,7 @@ async def _verify_csv(csv_path: Path) -> None:
     for result in results:
         verdict = result.verification_verdict.value
         counts[verdict] = counts.get(verdict, 0) + 1
-    console.print(f"Verified {len(results)} candidates Ã¢â€ â€™ {output_path}")
+    console.print(f"Verified {len(results)} candidates -> {output_path}")
     for verdict, count in sorted(counts.items()):
         console.print(f"  {verdict}: {count}")
     console.print(f"  catch-all: {sum(result.catch_all_domain is True for result in results)}")
@@ -1829,7 +1877,7 @@ def today() -> None:
     console.print(f"Today's list: {len(eligible)} of {remaining} available; ramp cap {used}/{cap}")
     for row in eligible:
         console.print(
-            f"  person_id={row['id']} {row['first_name']} {row['last_name']} Ã¢â‚¬â€ "
+            f"  person_id={row['id']} {row['first_name']} {row['last_name']} -> "
             f"{row['title'] or 'role unknown'} at {row['company']} ({row['email']})"
         )
 
