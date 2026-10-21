@@ -1,33 +1,16 @@
-"""Add job intelligence columns to the live database. Idempotent.
+"""Run all pending schema migrations on the live database. Idempotent.
 
     python scripts/migrate_job_intel.py
 """
 from __future__ import annotations
 
-import sqlite3
 import sys
 from pathlib import Path
 
-_NEW_COLUMNS: dict[str, str] = {
-    "description": "TEXT",
-    "salary_min": "INTEGER",
-    "salary_max": "INTEGER",
-    "salary_currency": "TEXT",
-    "salary_period": "TEXT",
-    "salary_source": "TEXT",
-    "tech_stack_json": "TEXT",
-    "reputation_score": "REAL",
-    "reputation_signals_json": "TEXT",
-    "enriched_at": "TEXT",
-}
+_repo = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_repo / "src"))
 
-
-def ensure_schema(conn: sqlite3.Connection) -> None:
-    cols = [row[1] for row in conn.execute("PRAGMA table_info(job)").fetchall()]
-    for name, typ in _NEW_COLUMNS.items():
-        if name not in cols:
-            conn.execute(f"ALTER TABLE job ADD COLUMN {name} {typ}")
-    conn.commit()
+from leadforge.db import connect, init_schema, schema_version  # noqa: E402
 
 
 def main() -> int:
@@ -35,14 +18,21 @@ def main() -> int:
     if not db.exists():
         print(f"database not found: {db}", file=sys.stderr)
         return 1
-    conn = sqlite3.connect(db)
+    conn = connect(db)
     try:
-        ensure_schema(conn)
-        cols = [row[1] for row in conn.execute("PRAGMA table_info(job)").fetchall()]
+        before = schema_version(conn)
+        init_schema(conn)
+        after = schema_version(conn)
+        job_cols = [row[1] for row in conn.execute("PRAGMA table_info(job)").fetchall()]
         print(f"database: {db}")
-        print(f"job columns: {len(cols)}")
-        for name in _NEW_COLUMNS:
-            print(f"  job.{name}: {name in cols}")
+        print(f"schema version: {before} -> {after}")
+        print(f"job columns: {len(job_cols)}")
+        for required in (
+            "description", "salary_min", "salary_max", "salary_currency",
+            "salary_period", "salary_source", "tech_stack_json",
+            "reputation_score", "reputation_signals_json", "enriched_at",
+        ):
+            print(f"  job.{required}: {required in job_cols}")
     finally:
         conn.close()
     return 0

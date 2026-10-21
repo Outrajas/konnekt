@@ -231,7 +231,19 @@ if (-not $Quick) {
         }
     }
 
-# Summary-Host ""
+    # 16. migrations framework
+    $checkMig = "scripts\check_migrations.py"
+    if (Test-Path $checkMig) {
+        $migOut = (& $py $checkMig 2>&1 | Out-String).Trim()
+        if ($migOut -like "OK*") {
+            Add-Check "migrations" $true $migOut
+        } else {
+            Add-Check "migrations" $false "see detail"
+            ($migOut -split "`r?`n") | Select-Object -First 8 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkRed }
+        }
+    }
+
+# Summaryost ""
 $pass  = @($script:Checks | Where-Object { $_.Pass }).Count
 $fail  = @($script:Checks | Where-Object { -not $_.Pass }).Count
 $total = $pass + $fail

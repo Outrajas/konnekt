@@ -1,7 +1,8 @@
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
-MIGRATIONS = [
+MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
     """
     CREATE TABLE IF NOT EXISTS company (
         id INTEGER PRIMARY KEY,
@@ -145,6 +146,30 @@ MIGRATIONS = [
 ]
 
 
+def _migration_add_job_intel_columns(conn: sqlite3.Connection) -> None:
+    """Add job-intel columns to `job`. Idempotent - safe on live and fresh DBs."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(job)").fetchall()}
+    cols = {
+        "description": "TEXT",
+        "salary_min": "INTEGER",
+        "salary_max": "INTEGER",
+        "salary_currency": "TEXT",
+        "salary_period": "TEXT",
+        "salary_source": "TEXT",
+        "tech_stack_json": "TEXT",
+        "reputation_score": "REAL",
+        "reputation_signals_json": "TEXT",
+        "enriched_at": "TEXT",
+    }
+    for name, sqltype in cols.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE job ADD COLUMN {name} {sqltype}")
+    conn.commit()
+
+
+MIGRATIONS.append(_migration_add_job_intel_columns)
+
+
 def connect(path: str | Path) -> sqlite3.Connection:
     """Open a SQLite database with WAL and foreign-key enforcement enabled."""
     database_path = str(path)
@@ -172,7 +197,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
     current = schema_version(conn)
     for version, migration in enumerate(MIGRATIONS, start=1):
         if version > current:
-            conn.executescript(migration)
+            if isinstance(migration, str):
+                conn.executescript(migration)
+            else:
+                migration(conn)
             conn.execute("DELETE FROM schema_version")
             conn.execute("INSERT INTO schema_version(version) VALUES (?)", (version,))
             conn.commit()
