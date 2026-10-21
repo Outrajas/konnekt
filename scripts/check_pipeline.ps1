@@ -197,8 +197,27 @@ if (-not $Quick) {
     Write-Host "  (skipping pytest/ruff/mypy/replay/profiles - Quick mode)" -ForegroundColor DarkGray
 }
 
-# Summary
-Write-Host ""
+    # 13. profile ingest --track flag
+    if (Test-Path $lf) {
+        $ingestHelp = & $lf profile ingest --help 2>&1 | Out-String
+        if ($ingestHelp -match '--track') {
+            Add-Check "profile ingest --track" $true "flag available"
+        } else {
+            Add-Check "profile ingest --track" $false "flag missing from help"
+        }
+    }
+
+    # 14. discover --profile flag
+    if (Test-Path $lf) {
+        $discoverHelp = & $lf discover --help 2>&1 | Out-String
+        if ($discoverHelp -match '--profile') {
+            Add-Check "discover --profile" $true "flag available"
+        } else {
+            Add-Check "discover --profile" $false "flag missing from help"
+        }
+    }
+
+# Summaryte-Host ""
 $pass  = @($script:Checks | Where-Object { $_.Pass }).Count
 $fail  = @($script:Checks | Where-Object { -not $_.Pass }).Count
 $total = $pass + $fail

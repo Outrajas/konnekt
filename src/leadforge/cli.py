@@ -484,12 +484,71 @@ def profile_show(
         conn.close()
 
 
+def _load_profile_for_discover(track: str | None) -> OperatorProfile:
+    """Load an OperatorProfile for the discover command.
+
+    If `track` is given, read from the profiles table (multi-profile mode).
+    Otherwise fall back to data/profile.json (legacy single-profile mode).
+    """
+    if track is None:
+        profile_path = settings.data_dir / "profile.json"
+        if not profile_path.is_file():
+            console.print(
+                f"[red]error:[/] {profile_path} not found and no --profile given"
+            )
+            raise typer.Exit(code=2)
+        return OperatorProfile.model_validate_json(
+            profile_path.read_text(encoding="utf-8")
+        )
+
+    import sqlite3
+
+    from leadforge import profiles as _profiles
+
+    db_path = settings.data_dir / "cache" / "leadforge.db"
+    if not db_path.exists():
+        console.print(
+            f"[red]error:[/] database missing: {db_path} (run 'leadforge init-db')"
+        )
+        raise typer.Exit(code=2)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _profiles.ensure_schema(conn)
+        try:
+            profile_id = _profiles.resolve_profile_arg(conn, track)
+        except ValueError as exc:
+            console.print(f"[red]error:[/] {exc}")
+            raise typer.Exit(code=2) from None
+        row = _profiles.get_profile(conn, profile_id)
+        if row is None:
+            console.print(f"[red]error:[/] profile '{track}' not found")
+            raise typer.Exit(code=2)
+        kwargs: dict = {
+            "skills": list(row.skills),
+            "target_titles": list(row.target_titles),
+        }
+        if "location_preferences" in OperatorProfile.model_fields:
+            kwargs["location_preferences"] = list(row.localities)
+        return OperatorProfile(**kwargs)
+    finally:
+        conn.close()
+
+
 @app.command("discover")
 def discover(
     companies: Annotated[Path, typer.Option(..., "--companies", exists=True, dir_okay=False)],
     dry_run: bool = typer.Option(False, "--dry-run"),
     include_hn: bool = typer.Option(False, "--include-hn"),
     limit: Annotated[int | None, typer.Option("--limit", min=1)] = None,
+    profile: Annotated[
+        str | None,
+        typer.Option(
+            "--profile",
+            help="Profile track or profile_id (reads from profiles table). "
+            "Omit for legacy data/profile.json.",
+        ),
+    ] = None,
 ) -> None:
     """Find public jobs for operator-supplied companies; dry-run makes no requests."""
     company_rows = read_companies(companies)
@@ -497,6 +556,8 @@ def discover(
         company_rows = company_rows[:limit]
     if dry_run:
         console.print("Discovery plan (no requests made):")
+        if profile is not None:
+            console.print(f"  profile: {profile}")
         for item in plan_discovery(company_rows, settings):
             console.print(f"  {item}")
         if include_hn:
@@ -512,16 +573,17 @@ def discover(
     if companies.resolve() != (settings.input_dir / "companies.csv").resolve():
         console.print("[red]Discovery refused:[/] live runs require data/input/companies.csv.")
         raise typer.Exit(code=2)
-    profile_path = settings.data_dir / "profile.json"
-    profile = OperatorProfile.model_validate_json(profile_path.read_text(encoding="utf-8"))
+    op_profile = _load_profile_for_discover(profile)
     fetcher = Fetcher(settings)
 
     async def run_discovery():
         collected = []
         for company in company_rows:
-            collected.extend(await discover_company_jobs(company, profile, fetcher=fetcher))
+            collected.extend(
+                await discover_company_jobs(company, op_profile, fetcher=fetcher)
+            )
         if include_hn:
-            collected.extend(await discover_hn_signals(company_rows, profile))
+            collected.extend(await discover_hn_signals(company_rows, op_profile))
         return collected
 
     jobs = asyncio.run(run_discovery())
