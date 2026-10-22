@@ -8,7 +8,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import dns.resolver
 import typer
@@ -549,6 +549,11 @@ def discover(
             "Omit for legacy data/profile.json.",
         ),
     ] = None,
+    intel: bool = typer.Option(
+        False,
+        "--intel",
+        help="Persist jobs, enrich salary/tech, and score company reputation.",
+    ),
 ) -> None:
     """Find public jobs for operator-supplied companies; dry-run makes no requests."""
     company_rows = read_companies(companies)
@@ -591,6 +596,182 @@ def discover(
     output_path = settings.output_dir / "discovered_jobs.csv"
     save_jobs(jobs, output_path)
     console.print(f"Discovered {len(jobs)} jobs -> {output_path}")
+
+    if intel:
+        _run_job_intel(jobs, profile or "default", settings)
+
+
+def _run_job_intel(jobs: list, profile_id: str, settings) -> None:
+    """Persist + enrich + reputation-score the given jobs; print a ranked table."""
+    import json
+
+    from rich.table import Table
+
+    from leadforge.db import connect
+    from leadforge.job_enrich import enrich_job_row
+    from leadforge.job_persist import persist_jobs
+    from leadforge.job_reputation import compute_company_reputation, is_acceptable
+
+    url_to_id, stats = persist_jobs(jobs, settings, profile_id=profile_id)
+    if not url_to_id:
+        console.print("[yellow]intel: no jobs to enrich[/]")
+        return
+
+    for jid in url_to_id.values():
+        enrich_job_row(jid, settings)
+
+    domains = sorted({j.domain.strip().lower() for j in jobs if j.domain})
+    by_domain = {d: compute_company_reputation(d, settings) for d in domains}
+
+    conn = connect(settings.db_path)
+    try:
+        placeholders = ",".join("?" * len(url_to_id))
+        rows = conn.execute(
+            f"SELECT j.*, c.domain AS company_domain, c.name AS company_name "
+            f"FROM job j JOIN company c ON c.id = j.company_id "
+            f"WHERE j.id IN ({placeholders}) "
+            f"ORDER BY j.reputation_score DESC, j.salary_min DESC",
+            list(url_to_id.values()),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    table = Table(
+        title=f"Job intel (profile={profile_id})",
+        show_header=True,
+        header_style="bold",
+    )
+    table.add_column("title", style="cyan", overflow="fold", max_width=40)
+    table.add_column("company", style="green")
+    table.add_column("salary", justify="right")
+    table.add_column("tech", justify="right")
+    table.add_column("rep", justify="right")
+    table.add_column("accept", justify="center")
+    table.add_column("reason")
+
+    accepted = 0
+    for row in rows:
+        domain = row["company_domain"]
+        rep = by_domain.get(domain)
+
+        if row["salary_min"] is None:
+            salary_str = "-"
+        elif row["salary_min"] == row["salary_max"]:
+            salary_str = f"{row['salary_currency'] or ''}{row['salary_min']:,}"
+        else:
+            salary_str = (
+                f"{row['salary_currency'] or ''}"
+                f"{row['salary_min']:,}-{row['salary_max']:,}"
+            )
+
+        try:
+            tech = json.loads(row["tech_stack_json"] or "[]")
+        except json.JSONDecodeError:
+            tech = []
+
+        rep_str = f"{(row['reputation_score'] or 0.0):.2f}"
+
+        if rep is None:
+            ok, reason = False, "no-reputation"
+        else:
+            ok, reason = is_acceptable(row, rep)
+        if ok:
+            accepted += 1
+
+        table.add_row(
+            row["title"],
+            row["company_name"],
+            salary_str,
+            str(len(tech)),
+            rep_str,
+            "yes" if ok else "no",
+            reason,
+        )
+
+    console.print(table)
+    console.print(
+        f"[bold]Intel summary:[/] {len(rows)} jobs, {accepted} acceptable, "
+        f"{len(domains)} companies "
+        f"({stats.jobs_created} new, {stats.jobs_updated} updated)"
+    )
+
+
+@app.command("job-intel")
+def job_intel_command(
+    domain: Annotated[
+        str | None,
+        typer.Option("--domain", help="Company domain to enrich"),
+    ] = None,
+    all_jobs: bool = typer.Option(
+        False, "--all", help="Enrich every un-enriched job in the DB"
+    ),
+    limit: Annotated[int | None, typer.Option("--limit", min=1)] = None,
+) -> None:
+    """Enrich existing DB jobs with salary/tech; score company reputation."""
+    from leadforge.db import connect
+    from leadforge.job_enrich import enrich_job_row
+    from leadforge.job_reputation import compute_company_reputation
+
+    if not domain and not all_jobs:
+        console.print("[red]job-intel requires --domain X or --all[/]")
+        raise typer.Exit(code=2)
+
+    conn = connect(settings.db_path)
+    try:
+        if domain:
+            d = domain.strip().lower()
+            rows = conn.execute(
+                "SELECT j.id FROM job j JOIN company c ON c.id=j.company_id "
+                "WHERE c.domain=?",
+                (d,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id FROM job WHERE enriched_at IS NULL"
+            ).fetchall()
+            if limit:
+                rows = rows[:limit]
+    finally:
+        conn.close()
+
+    if not rows:
+        console.print("[yellow]no jobs matched[/]")
+        return
+
+    enriched = 0
+    for r in rows:
+        result = enrich_job_row(cast(int, r["id"]), settings)
+        if result and not result.skipped:
+            enriched += 1
+
+    domains: set[str] = set()
+    if domain:
+        domains.add(domain.strip().lower())
+    else:
+        ids = [cast(int, r["id"]) for r in rows]
+        if ids:
+            conn = connect(settings.db_path)
+            try:
+                placeholders = ",".join("?" * len(ids))
+                for row in conn.execute(
+                    f"SELECT DISTINCT c.domain FROM job j "
+                    f"JOIN company c ON c.id=j.company_id "
+                    f"WHERE j.id IN ({placeholders})",
+                    ids,
+                ):
+                    domains.add(row["domain"])
+            finally:
+                conn.close()
+
+    for d in sorted(domains):
+        rep = compute_company_reputation(d, settings)
+        console.print(
+            f"  {d}: reputation={rep.score:.2f} signals={rep.signals}"
+        )
+
+    console.print(
+        f"[green]enriched {enriched} jobs across {len(domains)} domains[/]"
+    )
 
 
 @app.command("people")

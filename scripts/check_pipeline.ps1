@@ -255,7 +255,19 @@ if (-not $Quick) {
         }
     }
 
-# Summaryt ""
+    # 18. job-intel + discover --intel flags
+    if (Test-Path $lf) {
+        $jiHelp = & $lf job-intel --help 2>&1 | Out-String
+        $dHelp  = & $lf discover --help 2>&1 | Out-String
+        $ok = ($jiHelp -match '--domain') -and ($jiHelp -match '--all') -and ($dHelp -match '--intel')
+        if ($ok) {
+            Add-Check "job-intel CLI" $true "job-intel + discover --intel"
+        } else {
+            Add-Check "job-intel CLI" $false "missing flags"
+        }
+    }
+
+# Summary""
 $pass  = @($script:Checks | Where-Object { $_.Pass }).Count
 $fail  = @($script:Checks | Where-Object { -not $_.Pass }).Count
 $total = $pass + $fail
