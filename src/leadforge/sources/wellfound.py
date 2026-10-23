@@ -59,14 +59,18 @@ def _clean_domain(slug: str) -> str:
 
 
 def _salary_prefix(compensation: str) -> str:
-    """Prefix the description with a parseable salary line when compensation is real.
+    """Prefix the description with a parseable salary line.
 
-    `extract_salary` (in job_intel) will parse this string when the job is enriched,
-    so Wellfound salary data flows through the same code path as ATS descriptions.
+    `extract_salary` will parse this string during enrichment, so Wellfound
+    salary data flows through the same code path as ATS descriptions. The
+    equity portion after a bullet character is stripped so the salary regex
+    stays clean.
     """
     if not compensation:
         return ""
     stripped = compensation.strip()
+    if "\u2022" in stripped:
+        stripped = stripped.split("\u2022", 1)[0].strip()
     low = stripped.lower()
     if not stripped or low in {"undisclosed", "competitive", "doe"}:
         return ""
@@ -120,14 +124,87 @@ def _job_from_apollo_entry(entry: dict, apollo: dict) -> Job | None:
     )
 
 
+def _job_from_search_result(entry: dict, startup: dict) -> Job | None:
+    """Build a Job from a role-page JobListingSearchResult + its StartupResult."""
+    if not isinstance(entry, dict) or not isinstance(startup, dict):
+        return None
+    title = entry.get("title") or entry.get("primaryRoleTitle") or ""
+    jid = entry.get("id")
+    slug = entry.get("slug")
+    company = startup.get("name")
+    company_slug = startup.get("slug")
+    if not (title and jid and slug and company and company_slug):
+        return None
+    domain = _clean_domain(str(company_slug))
+    if not domain:
+        return None
+    url = f"{WELLFOUND_BASE}/jobs/{jid}-{slug}"
+    comp = entry.get("compensation") or ""
+    desc = _salary_prefix(str(comp))
+    locs = entry.get("locationNames") or []
+    if isinstance(locs, list) and locs:
+        location = str(locs[0])
+    elif entry.get("remote"):
+        location = "Remote"
+    else:
+        location = None
+    return Job(
+        company=str(company),
+        domain=domain,
+        title=str(title),
+        url=url,
+        location=location,
+        employment_type=entry.get("jobType"),
+        description=desc,
+        source="wellfound",
+        remote=bool(entry.get("remote", False)),
+    )
+
+
+def _walk_apollo_search(apollo: dict) -> list[Job]:
+    """Role pages: iterate StartupResult, resolve highlightedJobListings refs."""
+    jobs: list[Job] = []
+    seen: set[str] = set()
+    for key, startup in apollo.items():
+        if not isinstance(key, str) or not key.startswith("StartupResult:"):
+            continue
+        if not isinstance(startup, dict):
+            continue
+        refs = startup.get("highlightedJobListings") or []
+        if not isinstance(refs, list):
+            continue
+        for ref in refs:
+            if not isinstance(ref, dict) or "__ref" not in ref:
+                continue
+            entry = apollo.get(ref["__ref"])
+            if not isinstance(entry, dict):
+                continue
+            job = _job_from_search_result(entry, startup)
+            if job is not None and job.url not in seen:
+                seen.add(job.url)
+                jobs.append(job)
+    return jobs
+
+
 def parse_wellfound(html: str) -> list[Job]:
-    """Parse Wellfound HTML. Returns [] when Apollo state is absent or unrecognised."""
+    """Parse Wellfound HTML. Dispatches on Apollo entry types.
+
+    - Homepage (`/jobs`): `JobListing:*` + `Startup:*`
+    - Role pages (`/role/...`): `StartupResult:*` + `JobListingSearchResult:*`
+    """
     next_data = _extract_next_data(html)
     if not next_data:
         return []
     apollo = _apollo_data(next_data)
     if not apollo:
         return []
+
+    has_search_results = any(
+        isinstance(k, str) and k.startswith("JobListingSearchResult:")
+        for k in apollo
+    )
+    if has_search_results:
+        return _walk_apollo_search(apollo)
 
     jobs: list[Job] = []
     seen: set[str] = set()
@@ -142,12 +219,25 @@ def parse_wellfound(html: str) -> list[Job]:
     return jobs
 
 
-def build_search_url(profile=None) -> str:
-    """Default Wellfound job search URL.
+def build_search_url(profile=None, *, india: bool = True) -> str:
+    """Build a Wellfound search URL.
 
-    Profile-aware queries are deferred; the caller may append path segments.
+    - No profile -> the India role page for machine-learning-engineer (default
+      operator track)
+    - Profile with target_titles -> role page for the first title
+    - india=True -> `/role/l/<role>/india` (location-scoped)
+    - india=False -> `/role/r/<role>` (global remote)
     """
-    return WELLFOUND_SEARCH_URL
+    default_role = "machine-learning-engineer"
+    if profile is None or not getattr(profile, "target_titles", None):
+        role = default_role
+    else:
+        raw = profile.target_titles[0].lower().strip()
+        slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+        role = slug or default_role
+    if india:
+        return f"{WELLFOUND_BASE}/role/l/{role}/india"
+    return f"{WELLFOUND_BASE}/role/r/{role}"
 
 
 def domain_from_wellfound_slug(domain: str) -> str:

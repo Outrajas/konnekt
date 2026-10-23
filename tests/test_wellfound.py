@@ -118,7 +118,7 @@ def test_url_uses_id_and_slug():
 def test_salary_prefix_added_when_compensation_present():
     html = _wrap(_apollo([_sample_job(compensation="$140k – $180k")], [_sample_startup()]))
     jobs = parse_wellfound(html)
-    assert jobs[0].description.startswith("Salary: $140k – $180k")
+    assert jobs[0].description.startswith("Salary: $140k – $180k.")
 
 
 def test_salary_prefix_skipped_when_compensation_empty():
@@ -193,7 +193,9 @@ def test_parses_real_fixture():
 
 
 def test_build_search_url_default():
-    assert build_search_url() == "https://wellfound.com/jobs"
+    assert build_search_url() == (
+        "https://wellfound.com/role/l/machine-learning-engineer/india"
+    )
 # ---------------- filter_jobs_for_operator tests ----------------
 
 
@@ -295,3 +297,148 @@ def test_filter_real_fixture_subset_of_parsed():
     jobs = parse_wellfound(_wrap(raw))
     filtered = filter_jobs_for_operator(jobs)
     assert len(filtered) <= len(jobs)
+# ---------------- role-page (JobListingSearchResult) tests ----------------
+
+_ROLE_FIXTURE = Path(__file__).parent / "fixtures" / "sources" / "wellfound_role_sample.json"
+
+
+def _role_apollo() -> dict:
+    if not _ROLE_FIXTURE.exists():
+        return {}
+    raw = json.loads(_ROLE_FIXTURE.read_text(encoding="utf-8"))
+    return raw["props"]["pageProps"]["apolloState"]["data"]
+
+
+def test_role_page_parses_search_results():
+    """Role-page fixture (India ML) parses into Job objects."""
+    if not _ROLE_FIXTURE.exists():
+        return  # fixture optional
+    data = _role_apollo()
+    html = _wrap({"props": {"pageProps": {"apolloState": {"data": data}}}})
+    jobs = parse_wellfound(html)
+    assert len(jobs) >= 1, f"expected >=1 job from role fixture, got {len(jobs)}"
+    for job in jobs:
+        assert job.source == "wellfound"
+        assert job.domain.endswith(".wellfound")
+        assert job.url.startswith("https://wellfound.com/jobs/")
+
+
+def test_role_page_dispatch_uses_search_walker():
+    """If a JobListingSearchResult is present, the search walker runs."""
+    startup = {
+        "id": "10",
+        "name": "ZCo",
+        "slug": "zco",
+        "highlightedJobListings": [{"__ref": "JobListingSearchResult:1"}],
+    }
+    job = {
+        "id": "1", "slug": "engineer", "title": "ML Engineer",
+        "compensation": "$100k", "locationNames": ["Bangalore"],
+        "remote": False, "jobType": "full-time",
+    }
+    apollo = {
+        "StartupResult:10": startup,
+        "JobListingSearchResult:1": job,
+    }
+    html = _wrap({"props": {"pageProps": {"apolloState": {"data": apollo}}}})
+    jobs = parse_wellfound(html)
+    assert len(jobs) == 1
+    assert jobs[0].company == "ZCo"
+    assert jobs[0].domain == "zco.wellfound"
+    assert jobs[0].title == "ML Engineer"
+    assert jobs[0].location == "Bangalore"
+
+
+def test_role_page_skips_startup_without_name():
+    startup = {
+        "id": "10",
+        "name": "",
+        "slug": "zco",
+        "highlightedJobListings": [{"__ref": "JobListingSearchResult:1"}],
+    }
+    job = {"id": "1", "slug": "e", "title": "Eng"}
+    apollo = {"StartupResult:10": startup, "JobListingSearchResult:1": job}
+    html = _wrap({"props": {"pageProps": {"apolloState": {"data": apollo}}}})
+    assert parse_wellfound(html) == []
+
+
+def test_role_page_skips_unresolvable_ref():
+    startup = {
+        "id": "10",
+        "name": "ZCo",
+        "slug": "zco",
+        "highlightedJobListings": [{"__ref": "JobListingSearchResult:MISSING"}],
+    }
+    apollo = {"StartupResult:10": startup}
+    html = _wrap({"props": {"pageProps": {"apolloState": {"data": apollo}}}})
+    assert parse_wellfound(html) == []
+
+
+def test_role_page_remote_flag_preserved():
+    startup = {
+        "id": "10",
+        "name": "ZCo",
+        "slug": "zco",
+        "highlightedJobListings": [{"__ref": "JobListingSearchResult:1"}],
+    }
+    job = {"id": "1", "slug": "e", "title": "ML Engineer", "remote": True, "locationNames": []}
+    apollo = {"StartupResult:10": startup, "JobListingSearchResult:1": job}
+    html = _wrap({"props": {"pageProps": {"apolloState": {"data": apollo}}}})
+    jobs = parse_wellfound(html)
+    assert len(jobs) == 1
+    assert jobs[0].remote is True
+    assert jobs[0].location == "Remote"
+
+
+def test_salary_prefix_strips_equity():
+    startup = {
+        "id": "10",
+        "name": "ZCo",
+        "slug": "zco",
+        "highlightedJobListings": [{"__ref": "JobListingSearchResult:1"}],
+    }
+    job = {
+        "id": "1",
+        "slug": "e",
+        "title": "ML",
+        "compensation": "$65k – $115k • 0.1% – 0.5%",
+    }
+    apollo = {"StartupResult:10": startup, "JobListingSearchResult:1": job}
+    html = _wrap({"props": {"pageProps": {"apolloState": {"data": apollo}}}})
+    jobs = parse_wellfound(html)
+    assert jobs[0].description.startswith("Salary: $65k – $115k.")
+    assert "0.1%" not in jobs[0].description
+
+
+# ---------------- build_search_url profile-aware tests ----------------
+
+
+def test_build_search_url_no_profile_india_default():
+    url = build_search_url()
+    assert url == "https://wellfound.com/role/l/machine-learning-engineer/india"
+
+
+def test_build_search_url_no_profile_global():
+    url = build_search_url(india=False)
+    assert url == "https://wellfound.com/role/r/machine-learning-engineer"
+
+
+def test_build_search_url_with_profile_india():
+    from leadforge.models import OperatorProfile
+    profile = OperatorProfile(target_titles=["Data Analyst"])
+    url = build_search_url(profile)
+    assert url == "https://wellfound.com/role/l/data-analyst/india"
+
+
+def test_build_search_url_with_profile_global():
+    from leadforge.models import OperatorProfile
+    profile = OperatorProfile(target_titles=["Software Engineer"])
+    url = build_search_url(profile, india=False)
+    assert url == "https://wellfound.com/role/r/software-engineer"
+
+
+def test_build_search_url_with_profile_multiword():
+    from leadforge.models import OperatorProfile
+    profile = OperatorProfile(target_titles=["Machine Learning Engineer"])
+    url = build_search_url(profile)
+    assert url == "https://wellfound.com/role/l/machine-learning-engineer/india"

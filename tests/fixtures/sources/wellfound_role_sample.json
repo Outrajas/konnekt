@@ -1,0 +1,143 @@
+{
+  "props": {
+    "pageProps": {
+      "apolloState": {
+        "data": {
+          "ROOT_QUERY": {
+            "__typename": "Query"
+          },
+          "SeoRoleKeyword:1048": {
+            "__typename": "SeoRoleKeyword",
+            "id": "1048",
+            "slug": "machine-learning-engineer",
+            "displayName": "Machine Learning Engineer"
+          },
+          "StartupResult:9077937": {
+            "__typename": "StartupResult",
+            "id": "9077937",
+            "name": "Simplismart",
+            "slug": "simplismart",
+            "companySize": "SIZE_51_200",
+            "highConcept": "Fastest Inference Engine for your GenAI Workloads on your Premises",
+            "highlightedJobListings": [
+              {
+                "__ref": "JobListingSearchResult:3650842"
+              },
+              {
+                "__ref": "JobListingSearchResult:3650832"
+              },
+              {
+                "__ref": "JobListingSearchResult:3870954"
+              }
+            ]
+          },
+          "JobListingSearchResult:3650842": {
+            "__typename": "JobListingSearchResult",
+            "id": "3650842",
+            "slug": "machine-learning-engineer",
+            "title": "Machine Learning Engineer",
+            "compensation": "\u20b920L \u2013 \u20b930L \u2022 No equity",
+            "locationNames": [
+              "Bengaluru"
+            ],
+            "remote": false,
+            "jobType": "full-time",
+            "primaryRoleTitle": "Machine Learning Engineer",
+            "yearsExperienceMin": 3,
+            "description": "**About Simplismart**\n\nSimplismart is a GenAI inference platform to deploy, scale, and monitor any GenAI model (LLMs, speech, vision, or diffusion) across cloud or on-prem. Built for strict SLAs, ente"
+          },
+          "JobListingSearchResult:3650832": {
+            "__typename": "JobListingSearchResult",
+            "id": "3650832",
+            "slug": "lead-technical-support-engineer",
+            "title": "Lead Technical Support Engineer",
+            "compensation": "\u20b915L \u2013 \u20b920L \u2022 No equity",
+            "locationNames": [
+              "Bengaluru"
+            ],
+            "remote": false,
+            "jobType": "full-time",
+            "primaryRoleTitle": "Other Engineering",
+            "yearsExperienceMin": 5,
+            "description": "**About Simplismart**\n\nSimplismart is a GenAI inference platform to deploy, scale, and monitor any GenAI model (LLMs, speech, vision, or diffusion) across cloud or on-prem. Built for strict SLAs, ente"
+          },
+          "JobListingSearchResult:3870954": {
+            "__typename": "JobListingSearchResult",
+            "id": "3870954",
+            "slug": "technical-support-engineer",
+            "title": "Technical Support Engineer",
+            "compensation": "No equity",
+            "locationNames": [
+              "Bengaluru"
+            ],
+            "remote": false,
+            "jobType": "full-time",
+            "primaryRoleTitle": "Other Engineering",
+            "yearsExperienceMin": 2,
+            "description": "**About Simplismart**\n\nSimplismart is a GenAI inference platform to deploy, scale, and monitor any GenAI model (LLMs, speech, vision, or diffusion) across cloud or on-prem. Built for strict SLAs, ente"
+          },
+          "StartupResult:900217": {
+            "__typename": "StartupResult",
+            "id": "900217",
+            "name": "Augury",
+            "slug": "augury",
+            "companySize": "SIZE_51_200",
+            "highConcept": "Machines talk, we listen",
+            "highlightedJobListings": [
+              {
+                "__ref": "JobListingSearchResult:4289913"
+              }
+            ]
+          },
+          "JobListingSearchResult:4289913": {
+            "__typename": "JobListingSearchResult",
+            "id": "4289913",
+            "slug": "machine-learning-engineer",
+            "title": "Machine Learning Engineer ",
+            "compensation": "",
+            "locationNames": [
+              "Bengaluru"
+            ],
+            "remote": false,
+            "jobType": "full-time",
+            "primaryRoleTitle": "Data Scientist",
+            "yearsExperienceMin": null,
+            "description": "Augury is building AgenticAI systems that transform how industrial organizations understand and optimize their operations. As a Senior ML Engineer on this team, you will help turn that vision into rea"
+          },
+          "StartupResult:6151623": {
+            "__typename": "StartupResult",
+            "id": "6151623",
+            "name": "Prodigal",
+            "slug": "prodigal-2",
+            "companySize": "SIZE_51_200",
+            "highConcept": "Building the intelligence layer that powers Consumer Finance",
+            "highlightedJobListings": [
+              {
+                "__ref": "JobListingSearchResult:4574411"
+              }
+            ]
+          },
+          "JobListingSearchResult:4574411": {
+            "__typename": "JobListingSearchResult",
+            "id": "4574411",
+            "slug": "machine-learning-engineer",
+            "title": "Machine Learning Engineer",
+            "compensation": "",
+            "locationNames": [
+              "Mumbai"
+            ],
+            "remote": false,
+            "jobType": "full-time",
+            "primaryRoleTitle": "Data Scientist",
+            "yearsExperienceMin": null,
+            "description": "## **About the DSML Team**\n\nThe Data Science and Machine Learning (DSML) team owns the full lifecycle of Prodigal's ML systems, from data curation to model selection, fine-tuning, and post-training, t"
+          }
+        }
+      }
+    }
+  },
+  "query": {
+    "role": "machine-learning-engineer",
+    "location": "india"
+  }
+}
