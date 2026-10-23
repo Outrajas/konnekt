@@ -442,3 +442,139 @@ def test_build_search_url_with_profile_multiword():
     profile = OperatorProfile(target_titles=["Machine Learning Engineer"])
     url = build_search_url(profile)
     assert url == "https://wellfound.com/role/l/machine-learning-engineer/india"
+# ---------------- fetch_wellfound_jobs tests ----------------
+
+import asyncio  # noqa: E402
+
+from leadforge.sources.wellfound import fetch_wellfound_jobs  # noqa: E402
+
+
+class _FakeResponse:
+    def __init__(self, html: str, status: int = 200, tier: int = 1):
+        self.html = html
+        self.status_code = status
+        self.tier = tier
+        self.final_url = ""
+
+
+class _FakeFetcher:
+    def __init__(self, html: str, fail: bool = False):
+        self.html = html
+        self.fail = fail
+        self.calls: list[dict] = []
+
+    async def fetch(self, url: str, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        if self.fail:
+            from leadforge.web.errors import FetchError
+
+            raise FetchError("simulated")
+        return _FakeResponse(self.html)
+
+
+def _search_apollo_for_test():
+    startup = {
+        "id": "10",
+        "name": "ZCo",
+        "slug": "zco",
+        "highlightedJobListings": [{"__ref": "JobListingSearchResult:1"}],
+    }
+    job = {
+        "id": "1",
+        "slug": "senior-ml",
+        "title": "Senior ML Engineer",
+        "compensation": "$140k",
+        "locationNames": ["Bangalore"],
+        "remote": False,
+    }
+    return {
+        "StartupResult:10": startup,
+        "JobListingSearchResult:1": job,
+    }
+
+
+def test_fetch_wellfound_jobs_returns_parsed_and_filtered():
+    apollo = _search_apollo_for_test()
+    html = _wrap({"props": {"pageProps": {"apolloState": {"data": apollo}}}})
+    fake = _FakeFetcher(html)
+    jobs = asyncio.run(fetch_wellfound_jobs(fetcher=fake))
+    assert len(jobs) == 1
+    assert jobs[0].title == "Senior ML Engineer"
+    assert jobs[0].company == "ZCo"
+
+
+def test_fetch_wellfound_jobs_uses_force_httpx():
+    apollo = _search_apollo_for_test()
+    html = _wrap({"props": {"pageProps": {"apolloState": {"data": apollo}}}})
+    fake = _FakeFetcher(html)
+    asyncio.run(fetch_wellfound_jobs(fetcher=fake))
+    assert fake.calls, "fetcher was not called"
+    call = fake.calls[0]
+    assert call.get("force_httpx") is True
+    assert call.get("min_tier") == 1
+    assert call.get("max_tier") == 1
+    assert call.get("purpose") == "job"
+
+
+def test_fetch_wellfound_jobs_returns_empty_on_fetch_error():
+    fake = _FakeFetcher("", fail=True)
+    jobs = asyncio.run(fetch_wellfound_jobs(fetcher=fake))
+    assert jobs == []
+
+
+def test_fetch_wellfound_jobs_returns_empty_on_empty_html():
+    fake = _FakeFetcher("")
+    jobs = asyncio.run(fetch_wellfound_jobs(fetcher=fake))
+    assert jobs == []
+
+
+def test_fetch_wellfound_jobs_uses_profile_url():
+    from leadforge.models import OperatorProfile
+
+    profile = OperatorProfile(target_titles=["Data Analyst"])
+    apollo = _search_apollo_for_test()
+    html = _wrap({"props": {"pageProps": {"apolloState": {"data": apollo}}}})
+    fake = _FakeFetcher(html)
+    asyncio.run(fetch_wellfound_jobs(profile=profile, fetcher=fake))
+    url = fake.calls[0]["url"]
+    assert url == "https://wellfound.com/role/l/data-analyst/india"
+
+
+def test_fetch_wellfound_jobs_global_url():
+    apollo = _search_apollo_for_test()
+    html = _wrap({"props": {"pageProps": {"apolloState": {"data": apollo}}}})
+    fake = _FakeFetcher(html)
+    asyncio.run(fetch_wellfound_jobs(fetcher=fake, india=False))
+    url = fake.calls[0]["url"]
+    assert url == "https://wellfound.com/role/r/machine-learning-engineer"
+
+
+def test_fetch_wellfound_jobs_entry_level_strict():
+    """Strict mode drops India jobs only if not entry-level - verify lenient still accepts."""
+    apollo = _search_apollo_for_test()
+    html = _wrap({"props": {"pageProps": {"apolloState": {"data": apollo}}}})
+    fake = _FakeFetcher(html)
+    # Strict would drop "Senior ML Engineer" if not India... but loc=India, so strict also keeps it
+    jobs = asyncio.run(fetch_wellfound_jobs(fetcher=fake, entry_level_mode="strict"))
+    assert len(jobs) == 1  # India keeps it regardless of mode
+
+
+# ---------------- salary prefix for equity-only ----------------
+
+def test_salary_prefix_no_equity_suppressed():
+    startup = {
+        "id": "10",
+        "name": "ZCo",
+        "slug": "zco",
+        "highlightedJobListings": [{"__ref": "JobListingSearchResult:1"}],
+    }
+    job = {
+        "id": "1",
+        "slug": "e",
+        "title": "ML",
+        "compensation": "No equity",
+    }
+    apollo = {"StartupResult:10": startup, "JobListingSearchResult:1": job}
+    html = _wrap({"props": {"pageProps": {"apolloState": {"data": apollo}}}})
+    jobs = parse_wellfound(html)
+    assert not jobs[0].description.startswith("Salary:")

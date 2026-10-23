@@ -72,7 +72,13 @@ def _salary_prefix(compensation: str) -> str:
     if "\u2022" in stripped:
         stripped = stripped.split("\u2022", 1)[0].strip()
     low = stripped.lower()
-    if not stripped or low in {"undisclosed", "competitive", "doe"}:
+    if not stripped or low in {
+        "undisclosed",
+        "competitive",
+        "doe",
+        "no equity",
+        "equity only",
+    }:
         return ""
     return f"Salary: {stripped}. "
 
@@ -331,4 +337,42 @@ def filter_jobs_for_operator(
             out.append(job)
             continue
     return out
+
+# ---------------- fetcher ----------------
+
+
+async def fetch_wellfound_jobs(
+    profile=None,
+    *,
+    fetcher=None,
+    india: bool = True,
+    entry_level_mode: str = "lenient",
+) -> list[Job]:
+    """Fetch and parse Wellfound role-page jobs.
+
+    Scrapling's Tier 1 hangs on wellfound.com, so this fetcher calls the
+    router with force_httpx=True. The parser, filter, and downstream
+    pipeline are unchanged.
+
+    Returns an empty list on any fetch or parse failure; callers should not
+    assume success.
+    """
+    from leadforge.config import settings
+    from leadforge.web.errors import FetchError
+    from leadforge.web.fetcher import Fetcher
+
+    router = fetcher or Fetcher(settings)
+    url = build_search_url(profile, india=india)
+    try:
+        resp = await router.fetch(
+            url,
+            min_tier=1,
+            max_tier=1,
+            purpose="job",
+            force_httpx=True,
+        )
+    except FetchError:
+        return []
+    jobs = parse_wellfound(resp.html or "")
+    return filter_jobs_for_operator(jobs, entry_level_mode=entry_level_mode)
 
