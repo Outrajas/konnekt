@@ -1,11 +1,10 @@
 """Wellfound (formerly AngelList Talent) job source.
 
-Wellfound is a Next.js app. Job listings live inside the `__NEXT_DATA__`
-script tag. The parser is deliberately defensive because Wellfound
-periodically renames internal schema keys.
-
-This module handles only parsing. The live fetcher lives in a follow-up
-commit once a real response fixture is captured.
+Wellfound is a Next.js app. Live data is published through the Apollo cache
+embedded in `__NEXT_DATA__`. Each `JobListing:<id>` entry references a
+`Startup:<id>` entry via `{"__ref": "Startup:..."}`. Company websites are not
+published in the cache; a `<startup-slug>.wellfound` placeholder domain is used
+so downstream persistence and reputation code can operate uniformly.
 """
 
 from __future__ import annotations
@@ -16,14 +15,13 @@ from urllib.parse import urlparse
 
 from leadforge.models import Job
 
+WELLFOUND_BASE = "https://wellfound.com"
 WELLFOUND_SEARCH_URL = "https://wellfound.com/jobs"
 
 _NEXT_DATA_RE = re.compile(
     r'<script[^>]*\bid=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
     re.DOTALL,
 )
-
-_SALARY_KEYS = ("compensation", "salary", "compensationRange", "salaryRange")
 
 
 def _extract_next_data(html: str) -> dict | None:
@@ -36,163 +34,107 @@ def _extract_next_data(html: str) -> dict | None:
         return None
 
 
-def _domain_from_url(url: str) -> str:
-    if not url:
-        return ""
-    try:
-        host = (urlparse(url).hostname or "").lower()
-    except Exception:
-        return ""
-    if host.startswith("www."):
-        host = host[4:]
-    return host
-
-
-def _to_int(value) -> int | None:
-    if value is None or value == "":
-        return None
-    try:
-        return int(float(str(value).replace(",", "")))
-    except (ValueError, TypeError):
-        return None
-
-
-def _compensation_tuple(item: dict) -> tuple[int | None, int | None, str | None]:
-    for key in _SALARY_KEYS:
-        block = item.get(key)
-        if isinstance(block, dict):
-            lo = _to_int(block.get("min") or block.get("minAmount"))
-            hi = _to_int(block.get("max") or block.get("maxAmount"))
-            cur = block.get("currency") or block.get("currencyCode")
-            if lo or hi:
-                return lo, hi, str(cur) if cur else None
-    return None, None, None
-
-
-def _salary_prefix(lo: int | None, hi: int | None, cur: str | None) -> str:
-    """Build a string the salary extractor will pick up from description."""
-    if not (lo or hi):
-        return ""
-    c = cur or ""
-    if lo and hi and lo != hi:
-        return f"Salary: {c}{lo}-{hi} per year. "
-    amt = lo or hi
-    return f"Salary: {c}{amt} per year. "
-
-
-def _location_of(item: dict) -> str:
-    loc = item.get("location") or item.get("locationName") or ""
-    if isinstance(loc, dict):
-        loc = loc.get("name") or loc.get("displayName") or ""
-    if not loc and item.get("remote"):
-        loc = "Remote"
-    return str(loc) if loc else ""
-
-
-def _description_of(item: dict) -> str:
-    desc = item.get("description") or item.get("descriptionText") or ""
-    if isinstance(desc, dict):
-        desc = desc.get("text") or desc.get("html") or ""
-    return str(desc)
-
-
-def _company_and_domain(item: dict) -> tuple[str, str]:
-    startup = item.get("startup") or item.get("company") or {}
-    if isinstance(startup, str):
-        return startup, ""
-    if not isinstance(startup, dict):
-        return "", ""
-    name = startup.get("name") or startup.get("displayName") or item.get("companyName") or ""
-    website = startup.get("website") or ""
-    domain = _domain_from_url(website)
-    if not domain:
-        slug = startup.get("slug") or startup.get("companySlug") or ""
-        if slug:
-            domain = f"{slug}.wellfound"
-    return str(name), domain
-
-
-def _job_url(item: dict) -> str:
-    url = item.get("url") or item.get("jobUrl") or ""
-    if url:
-        return str(url)
-    slug = item.get("slug") or ""
-    jid = item.get("id")
-    if jid and slug:
-        return f"https://wellfound.com/jobs/{jid}-{slug}"
-    if slug:
-        return f"https://wellfound.com/jobs/{slug}"
-    if jid:
-        return f"https://wellfound.com/jobs/{jid}"
-    return ""
-
-
-def _walk_jobs_list(next_data: dict) -> list:
-    """Wellfound has shipped several shapes; try each."""
+def _apollo_data(next_data: dict) -> dict:
+    if not isinstance(next_data, dict):
+        return {}
     props = next_data.get("props") or {}
     page = props.get("pageProps") or {}
-    for key in ("jobs", "jobListings", "initialJobListings", "listings"):
-        candidate = page.get(key)
-        if isinstance(candidate, list):
-            return candidate
-    state = page.get("initialState") or {}
-    if isinstance(state, dict):
-        for key in ("jobs", "jobListings", "listings"):
-            candidate = state.get(key)
-            if isinstance(candidate, list):
-                return candidate
-    # Newer shape: pageProps.data.jobs
-    data = page.get("data") or {}
-    if isinstance(data, dict):
-        for key in ("jobs", "jobListings", "listings"):
-            candidate = data.get(key)
-            if isinstance(candidate, list):
-                return candidate
-    return []
+    apollo_state = page.get("apolloState") or {}
+    data = apollo_state.get("data") or {}
+    return data if isinstance(data, dict) else {}
 
 
-def _job_from_item(item: dict) -> Job | None:
-    if not isinstance(item, dict):
+def _resolve(apollo: dict, value):
+    if isinstance(value, dict) and "__ref" in value:
+        return apollo.get(value["__ref"])
+    return value
+
+
+def _clean_domain(slug: str) -> str:
+    """Build a stable, comparison-friendly placeholder domain from startup slug."""
+    s = (slug or "").strip().lower()
+    # Startup slugs on Wellfound are already safe, but guard against stray chars.
+    s = re.sub(r"[^a-z0-9-]+", "-", s).strip("-")
+    return f"{s}.wellfound" if s else ""
+
+
+def _salary_prefix(compensation: str) -> str:
+    """Prefix the description with a parseable salary line when compensation is real.
+
+    `extract_salary` (in job_intel) will parse this string when the job is enriched,
+    so Wellfound salary data flows through the same code path as ATS descriptions.
+    """
+    if not compensation:
+        return ""
+    stripped = compensation.strip()
+    low = stripped.lower()
+    if not stripped or low in {"undisclosed", "competitive", "doe"}:
+        return ""
+    return f"Salary: {stripped}. "
+
+
+def _location_of(entry: dict) -> str | None:
+    names = entry.get("locationNames") or []
+    if isinstance(names, list) and names:
+        return str(names[0])
+    if entry.get("remote"):
+        return "Remote"
+    return None
+
+
+def _job_from_apollo_entry(entry: dict, apollo: dict) -> Job | None:
+    if not isinstance(entry, dict):
         return None
-    title = item.get("title") or item.get("role") or ""
-    if not title:
-        return None
-    company, domain = _company_and_domain(item)
-    if not company or not domain:
-        return None
-    url = _job_url(item)
-    if not url:
+    title = entry.get("title")
+    jid = entry.get("id")
+    slug = entry.get("slug")
+    if not title or not jid or not slug:
         return None
 
-    lo, hi, cur = _compensation_tuple(item)
-    desc = _salary_prefix(lo, hi, cur) + _description_of(item)
+    startup = _resolve(apollo, entry.get("startup"))
+    if not isinstance(startup, dict):
+        return None
+    company_name = startup.get("name")
+    company_slug = startup.get("slug")
+    if not company_name or not company_slug:
+        return None
+
+    domain = _clean_domain(str(company_slug))
+    if not domain:
+        return None
+
+    url = f"{WELLFOUND_BASE}/jobs/{jid}-{slug}"
+    comp = entry.get("compensation") or ""
+    desc = _salary_prefix(str(comp))
 
     return Job(
-        company=company,
+        company=str(company_name),
         domain=domain,
         title=str(title),
         url=url,
-        location=_location_of(item) or None,
-        employment_type=item.get("jobType") or item.get("employmentType"),
+        location=_location_of(entry),
+        employment_type=None,
         description=desc,
         source="wellfound",
+        remote=bool(entry.get("remote", False)),
     )
 
 
 def parse_wellfound(html: str) -> list[Job]:
-    """Parse Wellfound HTML. Returns [] when the payload shape is unrecognised."""
+    """Parse Wellfound HTML. Returns [] when Apollo state is absent or unrecognised."""
     next_data = _extract_next_data(html)
     if not next_data:
         return []
-
-    items = _walk_jobs_list(next_data)
-    if not items:
+    apollo = _apollo_data(next_data)
+    if not apollo:
         return []
 
     jobs: list[Job] = []
     seen: set[str] = set()
-    for item in items:
-        job = _job_from_item(item)
+    for key, entry in apollo.items():
+        if not isinstance(key, str) or not key.startswith("JobListing:"):
+            continue
+        job = _job_from_apollo_entry(entry, apollo)
         if job is None or job.url in seen:
             continue
         seen.add(job.url)
@@ -201,9 +143,102 @@ def parse_wellfound(html: str) -> list[Job]:
 
 
 def build_search_url(profile=None) -> str:
-    """Return the search URL.
+    """Default Wellfound job search URL.
 
-    Placeholder: verify against live Wellfound before enabling the fetcher.
-    A profile-aware version would append role/location query params.
+    Profile-aware queries are deferred; the caller may append path segments.
     """
     return WELLFOUND_SEARCH_URL
+
+
+def domain_from_wellfound_slug(domain: str) -> str:
+    """Extract the Wellfound startup slug from a `.wellfound` placeholder domain."""
+    if not domain or not domain.endswith(".wellfound"):
+        return ""
+    try:
+        return urlparse(f"https://{domain}").hostname or ""
+    except Exception:
+        return ""
+
+# ---------------- operator location/seniority filter ----------------
+
+INDIA_CITIES = frozenset({
+    "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad",
+    "pune", "chennai", "kolkata", "ahmedabad", "noida",
+    "gurgaon", "gurugram", "bhubaneswar", "jaipur", "indore",
+    "chandigarh", "coimbatore", "kochi", "trivandrum",
+    "thiruvananthapuram", "mysore", "mysuru", "nagpur", "surat",
+    "vizag", "visakhapatnam", "vadodara", "dehradun",
+})
+
+ENTRY_LEVEL_TITLE_HINTS = frozenset({
+    "junior", "jr", "entry", "graduate", "intern", "internship",
+    "trainee", "fresher", "apprentice", "new grad", "recent grad",
+})
+
+SENIORITY_EXCLUDE_HINTS = frozenset({
+    "senior", "sr", "staff", "principal", "lead", "head",
+    "director", "vp", "vice president", "chief", "cto", "ceo",
+    "founder", "co-founder", "distinguished", "architect",
+    "manager", "expert",
+})
+
+
+def _matches_hint(text: str, hints: frozenset[str]) -> bool:
+    if not text:
+        return False
+    low = text.lower()
+    for hint in hints:
+        if re.search(rf"\b{re.escape(hint)}\b", low):
+            return True
+    return False
+
+def _is_india_location(loc: str) -> bool:
+    if not loc:
+        return False
+    low = loc.lower()
+    if "india" in low:
+        return True
+    return _matches_hint(loc, INDIA_CITIES)
+
+
+def _is_entry_level_title(title: str, mode: str = "strict") -> bool:
+    if not title:
+        return mode == "lenient"
+    if _matches_hint(title, SENIORITY_EXCLUDE_HINTS):
+        return False
+    if mode == "strict":
+        return _matches_hint(title, ENTRY_LEVEL_TITLE_HINTS)
+    return True
+
+
+def filter_jobs_for_operator(
+    jobs: list[Job],
+    *,
+    india_always_ok: bool = True,
+    allow_remote_entry_level: bool = True,
+    entry_level_mode: str = "strict",
+) -> list[Job]:
+    """Filter Wellfound jobs per the operator's location/seniority preferences.
+
+    Rule:
+      - India (any location, any seniority): accept when india_always_ok
+      - Non-India: accept only when remote AND entry-level title
+      - Everything else: reject
+
+    entry_level_mode "strict" (default) requires an explicit entry keyword
+    (junior, entry, graduate, intern, trainee). "lenient" accepts any title
+    that is NOT explicitly senior/staff/lead/manager/etc.
+    """
+    out: list[Job] = []
+    for job in jobs:
+        loc = job.location or ""
+        if india_always_ok and _is_india_location(loc):
+            out.append(job)
+            continue
+        if allow_remote_entry_level and job.remote and _is_entry_level_title(
+            job.title, entry_level_mode
+        ):
+            out.append(job)
+            continue
+    return out
+

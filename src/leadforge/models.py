@@ -75,6 +75,7 @@ class Job(BaseModel):
     invites_email: bool = False
     fetch_tier: int | None = None
     js_rendered: bool = False
+    remote: bool = False
 
 
 class OperatorProfile(BaseModel):
