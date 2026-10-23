@@ -267,7 +267,17 @@ if (-not $Quick) {
         }
     }
 
-# Summary""
+    # 19. discover --board wellfound
+    if (Test-Path $lf) {
+        $dryOut = & $lf discover --skip-companies --board wellfound --dry-run 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0 -and $dryOut -match 'board: wellfound') {
+            Add-Check "discover --board" $true "wellfound dry-run OK"
+        } else {
+            Add-Check "discover --board" $false "dry-run failed (exit $LASTEXITCODE)"
+        }
+    }
+
+# Summary
 $pass  = @($script:Checks | Where-Object { $_.Pass }).Count
 $fail  = @($script:Checks | Where-Object { -not $_.Pass }).Count
 $total = $pass + $fail

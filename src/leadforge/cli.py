@@ -537,7 +537,15 @@ def _load_profile_for_discover(track: str | None) -> OperatorProfile:
 
 @app.command("discover")
 def discover(
-    companies: Annotated[Path, typer.Option(..., "--companies", exists=True, dir_okay=False)],
+    companies: Annotated[
+        Path | None,
+        typer.Option(
+            "--companies",
+            exists=True,
+            dir_okay=False,
+            help="Company list CSV (name,domain). Omit with --skip-companies.",
+        ),
+    ] = None,
     dry_run: bool = typer.Option(False, "--dry-run"),
     include_hn: bool = typer.Option(False, "--include-hn"),
     limit: Annotated[int | None, typer.Option("--limit", min=1)] = None,
@@ -554,18 +562,68 @@ def discover(
         "--intel",
         help="Persist jobs, enrich salary/tech, and score company reputation.",
     ),
+    board: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--board",
+            help="Board source to scrape. Repeatable. Supported: wellfound.",
+        ),
+    ] = None,
+    skip_companies: bool = typer.Option(
+        False,
+        "--skip-companies",
+        help="Run board-only discovery without a companies CSV.",
+    ),
+    board_india: bool = typer.Option(
+        True,
+        "--board-india/--no-board-india",
+        help="Scope board results to India (default: on).",
+    ),
+    board_entry_level: Annotated[
+        str,
+        typer.Option(
+            "--board-entry-level",
+            help="Entry-level matching: strict or lenient (default: lenient).",
+        ),
+    ] = "lenient",
 ) -> None:
-    """Find public jobs for operator-supplied companies; dry-run makes no requests."""
-    company_rows = read_companies(companies)
-    if limit is not None:
-        company_rows = company_rows[:limit]
+    """Find public jobs from company sites, HN, and/or boards; dry-run makes no requests."""
+    from leadforge.sources.wellfound import fetch_wellfound_jobs
+
+    if board is None:
+        board = []
+
+    if board_entry_level not in ("strict", "lenient"):
+        console.print(
+            f"[red]error:[/] --board-entry-level must be strict or lenient "
+            f"(got {board_entry_level!r})"
+        )
+        raise typer.Exit(code=2)
+
+    if companies is None and not skip_companies:
+        console.print(
+            "[red]error:[/] --companies is required unless --skip-companies is set"
+        )
+        raise typer.Exit(code=2)
+
+    company_rows: list = []
+    if companies is not None:
+        company_rows = read_companies(companies)
+        if limit is not None:
+            company_rows = company_rows[:limit]
+
     if dry_run:
         console.print("Discovery plan (no requests made):")
         if profile is not None:
             console.print(f"  profile: {profile}")
-        for item in plan_discovery(company_rows, settings):
-            console.print(f"  {item}")
-        if include_hn:
+        if company_rows:
+            for item in plan_discovery(company_rows, settings):
+                console.print(f"  {item}")
+        for b in board:
+            console.print(
+                f"  board: {b} india={board_india} entry_level={board_entry_level}"
+            )
+        if include_hn and company_rows:
             rule = DomainPolicy.load(settings.domain_policy_path, settings).resolve(
                 "hacker-news.firebaseio.com"
             )
@@ -574,22 +632,51 @@ def discover(
                 f"cap={rule.daily_cap} enabled={rule.enabled}"
             )
         return
-    _require_operator_inputs()
-    if companies.resolve() != (settings.input_dir / "companies.csv").resolve():
-        console.print("[red]Discovery refused:[/] live runs require data/input/companies.csv.")
-        raise typer.Exit(code=2)
+
+    if company_rows:
+        _require_operator_inputs()
+        if companies is not None and companies.resolve() != (
+            settings.input_dir / "companies.csv"
+        ).resolve():
+            console.print(
+                "[red]Discovery refused:[/] live company runs require "
+                "data/input/companies.csv."
+            )
+            raise typer.Exit(code=2)
+
     op_profile = _load_profile_for_discover(profile)
     fetcher = Fetcher(settings)
 
     async def run_discovery():
         collected = []
-        for company in company_rows:
-            collected.extend(
-                await discover_company_jobs(company, op_profile, fetcher=fetcher)
-            )
-        if include_hn:
-            collected.extend(await discover_hn_signals(company_rows, op_profile))
-        return collected
+        if company_rows and not skip_companies:
+            for company in company_rows:
+                collected.extend(
+                    await discover_company_jobs(company, op_profile, fetcher=fetcher)
+                )
+            if include_hn:
+                collected.extend(
+                    await discover_hn_signals(company_rows, op_profile)
+                )
+        for board_name in board:
+            if board_name == "wellfound":
+                wf_jobs = await fetch_wellfound_jobs(
+                    op_profile,
+                    fetcher=fetcher,
+                    india=board_india,
+                    entry_level_mode=board_entry_level,
+                )
+                collected.extend(wf_jobs)
+            else:
+                console.print(f"[yellow]unknown board:[/] {board_name}")
+        seen: set[str] = set()
+        unique: list = []
+        for j in collected:
+            if j.url in seen:
+                continue
+            seen.add(j.url)
+            unique.append(j)
+        return unique
 
     jobs = asyncio.run(run_discovery())
     persist_invite_signals(jobs, settings)

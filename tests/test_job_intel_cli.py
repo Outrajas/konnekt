@@ -58,3 +58,87 @@ def test_job_intel_domain_no_jobs(isolated_settings):
     result = runner.invoke(app, ["job-intel", "--domain", "nothing.test"])
     assert result.exit_code == 0
     assert "no jobs matched" in result.output
+# ---------------- discover --board CLI tests ----------------
+
+def test_discover_help_shows_board_flag():
+    runner = CliRunner()
+    result = runner.invoke(app, ["discover", "--help"])
+    assert result.exit_code == 0
+    assert "--board" in result.output
+
+
+def test_discover_help_shows_skip_companies():
+    runner = CliRunner()
+    result = runner.invoke(app, ["discover", "--help"])
+    assert result.exit_code == 0
+    assert "--skip-companies" in result.output
+
+
+def test_discover_help_shows_board_india():
+    runner = CliRunner()
+    result = runner.invoke(app, ["discover", "--help"])
+    assert result.exit_code == 0
+    assert "--board-india" in result.output
+
+
+def test_discover_invalid_entry_level_rejected(isolated_settings):
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["discover", "--skip-companies", "--board", "wellfound",
+         "--board-entry-level", "invalid"],
+    )
+    assert result.exit_code == 2
+    assert "must be strict or lenient" in result.output
+
+
+def test_discover_no_companies_no_skip_errors(isolated_settings):
+    runner = CliRunner()
+    result = runner.invoke(app, ["discover", "--board", "wellfound"])
+    assert result.exit_code == 2
+    assert "--companies is required" in result.output
+
+
+def test_discover_board_wellfound_dry_run(isolated_settings):
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["discover", "--skip-companies", "--board", "wellfound", "--dry-run"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "board: wellfound" in result.output
+    assert "india=True" in result.output
+
+
+def test_discover_board_wellfound_no_india_dry_run(isolated_settings):
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["discover", "--skip-companies", "--board", "wellfound",
+         "--no-board-india", "--dry-run"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "india=False" in result.output
+
+
+def test_discover_board_strict_entry_level_dry_run(isolated_settings):
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["discover", "--skip-companies", "--board", "wellfound",
+         "--board-entry-level", "strict", "--dry-run"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "entry_level=strict" in result.output
+
+
+def test_discover_multiple_boards_dry_run(isolated_settings):
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["discover", "--skip-companies",
+         "--board", "wellfound", "--board", "naukri", "--dry-run"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "board: wellfound" in result.output
+    assert "board: naukri" in result.output
