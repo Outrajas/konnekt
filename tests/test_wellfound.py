@@ -214,13 +214,14 @@ def _make_job(**overrides):
     return Job(**base)
 
 
-def test_filter_accepts_india_jobs():
+def test_filter_accepts_india_jobs_lenient():
+    """India + non-senior titles pass in lenient mode (new default)."""
     jobs = [
         _make_job(location="Bangalore"),
         _make_job(location="Mumbai, India"),
         _make_job(location="New Delhi"),
     ]
-    assert len(filter_jobs_for_operator(jobs)) == 3
+    assert len(filter_jobs_for_operator(jobs, entry_level_mode="lenient")) == 3
 
 
 def test_filter_rejects_non_india_non_remote():
@@ -240,7 +241,13 @@ def test_filter_accepts_remote_entry_level():
 
 def test_filter_rejects_remote_bare_title_strict():
     jobs = [_make_job(location="New York", title="Engineer", remote=True)]
-    assert filter_jobs_for_operator(jobs) == []
+    assert filter_jobs_for_operator(jobs, entry_level_mode="strict") == []
+
+
+def test_filter_accepts_remote_bare_title_lenient():
+    """Under lenient default, bare 'Engineer' remote title is accepted."""
+    jobs = [_make_job(location="New York", title="Engineer", remote=True)]
+    assert len(filter_jobs_for_operator(jobs)) == 1
 
 
 def test_filter_lenient_accepts_bare_title():
@@ -265,9 +272,18 @@ def test_filter_rejects_seniority_even_lenient():
         ) == [], f"should reject {senior_title!r}"
 
 
-def test_filter_accepts_india_regardless_of_title():
+def test_filter_india_senior_rejected_by_default():
+    """India + Senior is now rejected under default (india_requires_entry_level=True)."""
     jobs = [_make_job(location="Bangalore", title="Senior Engineer")]
-    assert len(filter_jobs_for_operator(jobs)) == 1
+    assert filter_jobs_for_operator(jobs) == []
+
+
+def test_filter_india_senior_accepts_with_bypass_flag():
+    """Bypass flag restores pre-6d behavior (accept all India)."""
+    jobs = [_make_job(location="Bangalore", title="Senior Engineer")]
+    assert len(
+        filter_jobs_for_operator(jobs, india_requires_entry_level=False)
+    ) == 1
 
 
 def test_filter_empty_location_rejected():
@@ -481,8 +497,8 @@ def _search_apollo_for_test():
     }
     job = {
         "id": "1",
-        "slug": "senior-ml",
-        "title": "Senior ML Engineer",
+        "slug": "junior-ml",
+        "title": "Junior ML Engineer",
         "compensation": "$140k",
         "locationNames": ["Bangalore"],
         "remote": False,
@@ -499,7 +515,7 @@ def test_fetch_wellfound_jobs_returns_parsed_and_filtered():
     fake = _FakeFetcher(html)
     jobs = asyncio.run(fetch_wellfound_jobs(fetcher=fake))
     assert len(jobs) == 1
-    assert jobs[0].title == "Senior ML Engineer"
+    assert jobs[0].title == "Junior ML Engineer"
     assert jobs[0].company == "ZCo"
 
 
@@ -549,14 +565,13 @@ def test_fetch_wellfound_jobs_global_url():
     assert url == "https://wellfound.com/role/r/machine-learning-engineer"
 
 
-def test_fetch_wellfound_jobs_entry_level_strict():
-    """Strict mode drops India jobs only if not entry-level - verify lenient still accepts."""
+def test_fetch_wellfound_jobs_india_junior_strict_accepted():
+    """Strict mode + India + Junior title -> accepted."""
     apollo = _search_apollo_for_test()
     html = _wrap({"props": {"pageProps": {"apolloState": {"data": apollo}}}})
     fake = _FakeFetcher(html)
-    # Strict would drop "Senior ML Engineer" if not India... but loc=India, so strict also keeps it
     jobs = asyncio.run(fetch_wellfound_jobs(fetcher=fake, entry_level_mode="strict"))
-    assert len(jobs) == 1  # India keeps it regardless of mode
+    assert len(jobs) == 1
 
 
 # ---------------- salary prefix for equity-only ----------------
@@ -578,3 +593,24 @@ def test_salary_prefix_no_equity_suppressed():
     html = _wrap({"props": {"pageProps": {"apolloState": {"data": apollo}}}})
     jobs = parse_wellfound(html)
     assert not jobs[0].description.startswith("Salary:")
+
+def test_filter_india_bare_engineer_strict_rejected():
+    """Strict mode requires explicit entry hint even for India."""
+    jobs = [_make_job(location="Bangalore", title="Software Engineer")]
+    assert filter_jobs_for_operator(jobs, entry_level_mode="strict") == []
+
+
+def test_filter_india_junior_strict_accepted():
+    jobs = [_make_job(location="Bangalore", title="Junior Software Engineer")]
+    assert len(filter_jobs_for_operator(jobs, entry_level_mode="strict")) == 1
+
+
+def test_filter_india_intern_strict_accepted():
+    jobs = [_make_job(location="Bangalore", title="ML Intern")]
+    assert len(filter_jobs_for_operator(jobs, entry_level_mode="strict")) == 1
+
+
+def test_filter_india_lead_rejected():
+    jobs = [_make_job(location="Bangalore", title="Lead ML Engineer")]
+    assert filter_jobs_for_operator(jobs) == []
+

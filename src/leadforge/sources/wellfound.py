@@ -311,29 +311,31 @@ def filter_jobs_for_operator(
     jobs: list[Job],
     *,
     india_always_ok: bool = True,
+    india_requires_entry_level: bool = True,
     allow_remote_entry_level: bool = True,
-    entry_level_mode: str = "strict",
+    entry_level_mode: str = "lenient",
 ) -> list[Job]:
-    """Filter Wellfound jobs per the operator's location/seniority preferences.
+    """Filter jobs by location + seniority.
 
-    Rule:
-      - India (any location, any seniority): accept when india_always_ok
-      - Non-India: accept only when remote AND entry-level title
-      - Everything else: reject
+    Operator policy:
+      - India passes geography check; also pass entry-level check
+        (india_requires_entry_level=True drops Senior/Lead/etc in India)
+      - Non-India requires remote=True AND entry-level title
 
-    entry_level_mode "strict" (default) requires an explicit entry keyword
-    (junior, entry, graduate, intern, trainee). "lenient" accepts any title
-    that is NOT explicitly senior/staff/lead/manager/etc.
+    entry_level_mode:
+      - "lenient" (default): any title that is NOT explicitly senior/lead/principal
+      - "strict": requires an explicit entry keyword
+        (junior, entry, graduate, intern, trainee, etc.)
     """
     out: list[Job] = []
     for job in jobs:
         loc = job.location or ""
+        is_entry = _is_entry_level_title(job.title, entry_level_mode)
         if india_always_ok and _is_india_location(loc):
-            out.append(job)
+            if not india_requires_entry_level or is_entry:
+                out.append(job)
             continue
-        if allow_remote_entry_level and job.remote and _is_entry_level_title(
-            job.title, entry_level_mode
-        ):
+        if allow_remote_entry_level and job.remote and is_entry:
             out.append(job)
             continue
     return out
@@ -347,16 +349,9 @@ async def fetch_wellfound_jobs(
     fetcher=None,
     india: bool = True,
     entry_level_mode: str = "lenient",
+    india_requires_entry: bool = True,
 ) -> list[Job]:
-    """Fetch and parse Wellfound role-page jobs.
-
-    Scrapling's Tier 1 hangs on wellfound.com, so this fetcher calls the
-    router with force_httpx=True. The parser, filter, and downstream
-    pipeline are unchanged.
-
-    Returns an empty list on any fetch or parse failure; callers should not
-    assume success.
-    """
+    """Fetch and parse Wellfound role-page jobs, filtered by operator policy."""
     from leadforge.config import settings
     from leadforge.web.errors import FetchError
     from leadforge.web.fetcher import Fetcher
@@ -374,5 +369,8 @@ async def fetch_wellfound_jobs(
     except FetchError:
         return []
     jobs = parse_wellfound(resp.html or "")
-    return filter_jobs_for_operator(jobs, entry_level_mode=entry_level_mode)
-
+    return filter_jobs_for_operator(
+        jobs,
+        entry_level_mode=entry_level_mode,
+        india_requires_entry_level=india_requires_entry,
+    )

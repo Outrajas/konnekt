@@ -586,6 +586,11 @@ def discover(
             help="Entry-level matching: strict or lenient (default: lenient).",
         ),
     ] = "lenient",
+    board_india_entry: bool = typer.Option(
+        True,
+        "--board-india-entry/--no-board-india-entry",
+        help="Also require entry-level titles for India jobs (default: on).",
+    ),
 ) -> None:
     """Find public jobs from company sites, HN, and/or boards; dry-run makes no requests."""
     from leadforge.sources.wellfound import fetch_wellfound_jobs
@@ -621,7 +626,9 @@ def discover(
                 console.print(f"  {item}")
         for b in board:
             console.print(
-                f"  board: {b} india={board_india} entry_level={board_entry_level}"
+                f"  board: {b} india={board_india} "
+                f"india_entry={board_india_entry} "
+                f"entry_level={board_entry_level}"
             )
         if include_hn and company_rows:
             rule = DomainPolicy.load(settings.domain_policy_path, settings).resolve(
@@ -665,6 +672,7 @@ def discover(
                     fetcher=fetcher,
                     india=board_india,
                     entry_level_mode=board_entry_level,
+                    india_requires_entry=board_india_entry,
                 )
                 collected.extend(wf_jobs)
             else:
@@ -686,6 +694,7 @@ def discover(
 
     if intel:
         _run_job_intel(jobs, profile or "default", settings)
+
 
 
 def _run_job_intel(jobs: list, profile_id: str, settings) -> None:
