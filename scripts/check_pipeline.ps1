@@ -277,6 +277,17 @@ if (-not $Quick) {
         }
     }
 
+    # 20. people-e2e command
+    if (Test-Path $lf) {
+        $pe2eHelp = & $lf people-e2e --help 2>&1 | Out-String
+        $ok = ($pe2eHelp -match '--profile') -and ($pe2eHelp -match '--max-companies') -and ($pe2eHelp -match '--dry-run')
+        if ($ok) {
+            Add-Check "people-e2e CLI" $true "profile + max-companies + dry-run"
+        } else {
+            Add-Check "people-e2e CLI" $false "missing flags"
+        }
+    }
+
 # Summary
 $pass  = @($script:Checks | Where-Object { $_.Pass }).Count
 $fail  = @($script:Checks | Where-Object { -not $_.Pass }).Count

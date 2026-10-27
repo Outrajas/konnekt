@@ -870,6 +870,65 @@ def job_intel_command(
     )
 
 
+@app.command("people-e2e")
+def people_e2e_command(
+    profile: Annotated[
+        str,
+        typer.Option("--profile", help="Profile track to filter jobs by."),
+    ] = "ai_ml",
+    max_companies: Annotated[
+        int | None, typer.Option("--max-companies", min=1)
+    ] = 5,
+    use_llm: bool = typer.Option(
+        True,
+        "--use-llm/--no-llm",
+        help="Use LLM-guided agent fallback when walker returns 0.",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Do everything except persist person rows."
+    ),
+) -> None:
+    """Run people discovery for companies with jobs. Writes to `person` table."""
+    import asyncio as _asyncio
+
+    from leadforge.stages.people_e2e import run_people_e2e
+
+    result = _asyncio.run(
+        run_people_e2e(
+            settings,
+            profile_id=profile,
+            max_companies=max_companies,
+            dry_run=dry_run,
+            llm_client=None if use_llm else False,  # False disables LLM path
+        )
+    )
+
+    table = Table(title=f"People E2E (profile={profile})", show_header=True)
+    table.add_column("company", style="cyan")
+    table.add_column("domain", style="green")
+    table.add_column("people", justify="right")
+    table.add_column("persisted", justify="right")
+    table.add_column("source")
+    table.add_column("note", overflow="fold", max_width=40)
+
+    for c in result.companies:
+        table.add_row(
+            c.company,
+            c.real_domain,
+            str(c.people_found),
+            str(c.persisted),
+            c.source,
+            c.note or "",
+        )
+
+    console.print(table)
+    console.print(
+        f"[bold]Total:[/] {result.total_found} people found, "
+        f"{result.total_persisted} new rows persisted across "
+        f"{len(result.companies)} companies"
+    )
+
+
 @app.command("people")
 def people(
     company: str = typer.Option(..., "--company"),

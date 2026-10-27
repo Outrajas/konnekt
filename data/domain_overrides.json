@@ -1,0 +1,11 @@
+{
+  "_comment": "Map Wellfound placeholder domains to real company domains. Add rows as you confirm companies. Format: '<placeholder>.wellfound' -> '<real-domain>' (no scheme, no path).",
+  "_example": {
+    "example-corp.wellfound": "example-corp.ai"
+  },
+  "simplismart.wellfound": "simplismart.ai",
+  "auxoai.wellfound": "auxo.ai",
+  "maxhome-ai.wellfound": "maxhome.ai",
+  "prodigal.wellfound": "prodigaltech.com",
+  "augury.wellfound": "augury.com"
+}
