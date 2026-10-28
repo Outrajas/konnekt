@@ -997,6 +997,61 @@ def email_e2e_command(
     )
 
 
+@app.command("draft-e2e")
+def draft_e2e_command(
+    profile: Annotated[
+        str, typer.Option("--profile", help="Profile track to filter persons by.")
+    ] = "ai_ml",
+    max_people: Annotated[
+        int, typer.Option("--max-people", min=1)
+    ] = 10,
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Template draft (no LLM call); useful for offline tests.",
+    ),
+) -> None:
+    """Draft personalized outreach for persons with sendable emails."""
+    import asyncio as _asyncio
+
+    from leadforge.stages.draft_e2e import run_draft_e2e
+
+    result = _asyncio.run(
+        run_draft_e2e(
+            settings,
+            profile_id=profile,
+            max_people=max_people,
+            dry_run=dry_run,
+        )
+    )
+
+    table = Table(title=f"Draft E2E (profile={profile})", show_header=True)
+    table.add_column("company", style="cyan")
+    table.add_column("person")
+    table.add_column("email", style="green")
+    table.add_column("subject", overflow="fold", max_width=40)
+    table.add_column("chars", justify="right")
+    table.add_column("evid", justify="right")
+    table.add_column("bad", justify="right")
+    table.add_column("note", overflow="fold", max_width=25)
+
+    for pe in result.people:
+        table.add_row(
+            pe.company, pe.name, pe.email or "-",
+            pe.subject or "-",
+            str(pe.body_chars),
+            str(pe.evidence_used),
+            str(len(pe.hallucinated)),
+            pe.note or "",
+        )
+
+    console.print(table)
+    console.print(
+        f"[bold]Total:[/] {result.total_drafted} drafts, "
+        f"{result.total_persisted} persisted to draft table + data/output/drafts/"
+    )
+
+
 @app.command("people")
 def people(
     company: str = typer.Option(..., "--company"),

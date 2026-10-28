@@ -300,6 +300,17 @@ if (-not $Quick) {
         }
     }
 
+    # 22. draft-e2e command
+    if (Test-Path $lf) {
+        $de2eHelp = & $lf draft-e2e --help 2>&1 | Out-String
+        $ok = ($de2eHelp -match '--profile') -and ($de2eHelp -match '--max-people') -and ($de2eHelp -match '--dry-run')
+        if ($ok) {
+            Add-Check "draft-e2e CLI" $true "profile + max-people + dry-run"
+        } else {
+            Add-Check "draft-e2e CLI" $false "missing flags"
+        }
+    }
+
 # Summary
 $pass  = @($script:Checks | Where-Object { $_.Pass }).Count
 $fail  = @($script:Checks | Where-Object { -not $_.Pass }).Count
