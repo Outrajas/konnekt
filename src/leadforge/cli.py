@@ -936,6 +936,67 @@ def people_e2e_command(
     )
 
 
+@app.command("email-e2e")
+def email_e2e_command(
+    profile: Annotated[
+        str,
+        typer.Option("--profile", help="Profile track to filter persons by."),
+    ] = "ai_ml",
+    max_companies: Annotated[
+        int | None, typer.Option("--max-companies", min=1)
+    ] = 3,
+    max_people_per_company: Annotated[
+        int, typer.Option("--max-people-per-company", min=1)
+    ] = 10,
+    smtp: bool = typer.Option(
+        True,
+        "--smtp/--no-smtp",
+        help="Enable SMTP verification. --no-smtp produces pattern-only candidates.",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Do everything except persist to DB."
+    ),
+) -> None:
+    """Run email discovery for persons with real domains. Writes to email_candidate."""
+    from leadforge.stages.email_e2e import run_email_e2e
+
+    result = run_email_e2e(
+        settings,
+        profile_id=profile,
+        max_companies=max_companies,
+        max_people_per_company=max_people_per_company,
+        smtp_enabled=smtp,
+        dry_run=dry_run,
+    )
+
+    table = Table(title=f"Email E2E (profile={profile})", show_header=True)
+    table.add_column("company", style="cyan")
+    table.add_column("person")
+    table.add_column("best email", style="green")
+    table.add_column("gen", justify="right")
+    table.add_column("send", justify="right")
+    table.add_column("sendable", justify="right")
+    table.add_column("conf", justify="right")
+    table.add_column("note", overflow="fold", max_width=30)
+
+    for pe in result.people:
+        table.add_row(
+            pe.company, pe.name, pe.best_email or "-",
+            str(pe.candidates_generated), str(pe.candidates_verified_send),
+            str(pe.candidates_sendable),
+            f"{pe.best_confidence:.2f}" if pe.best_email else "-",
+            pe.note or "",
+        )
+
+    console.print(table)
+    console.print(
+        f"[bold]Total:[/] {result.total_candidates} candidates, "
+        f"{result.total_sendable} sendable, "
+        f"{result.total_persisted} new rows persisted across "
+        f"{len(result.people)} people"
+    )
+
+
 @app.command("people")
 def people(
     company: str = typer.Option(..., "--company"),

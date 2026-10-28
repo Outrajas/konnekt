@@ -53,3 +53,25 @@ Thumbs.db
 
 # .env backups (contain secrets)
 .env.bak.*
+
+# pytest basetemp (per-run)
+.pytest_tmp*
+.pytest_cache*
+
+# one-off diagnostic scripts (kept on disk, not in git)
+scripts/fix_*.py
+scripts/probe_*.py
+scripts/patch_*.py
+scripts/diag_*.py
+scripts/dump_*.py
+scripts/inspect_*.py
+scripts/introspect_*.py
+scripts/wire_*.py
+scripts/smoke_*.py
+!scripts/smoke_agent.py
+scripts/verify_*.py
+scripts/extract_*.py
+scripts/repair_*.py
+scripts/restore_*.py
+scripts/cleanup_*.py
+scripts/test_*.py

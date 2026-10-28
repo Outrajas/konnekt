@@ -289,6 +289,17 @@ if (-not $Quick) {
         }
     }
 
+    # 21. email-e2e command
+    if (Test-Path $lf) {
+        $ee2eHelp = & $lf email-e2e --help 2>&1 | Out-String
+        $ok = ($ee2eHelp -match '--profile') -and ($ee2eHelp -match '--max-companies') -and ($ee2eHelp -match '--smtp')
+        if ($ok) {
+            Add-Check "email-e2e CLI" $true "profile + max-companies + smtp"
+        } else {
+            Add-Check "email-e2e CLI" $false "missing flags"
+        }
+    }
+
 # Summary
 $pass  = @($script:Checks | Where-Object { $_.Pass }).Count
 $fail  = @($script:Checks | Where-Object { -not $_.Pass }).Count
