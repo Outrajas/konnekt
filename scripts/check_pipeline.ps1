@@ -311,6 +311,16 @@ if (-not $Quick) {
         }
     }
 
+        # 23. e2e orchestrator (semantic dry-run check)
+    if (Test-Path $lf) {
+        $dryOut = & $lf e2e --profile ai_ml --dry-run 2>&1 | Out-String
+        $exit = $LASTEXITCODE
+        if ($exit -eq 0 -and $dryOut -match 'E2E pipeline') {
+            Add-Check "e2e CLI" $true "dry-run OK"
+        } else {
+            Add-Check "e2e CLI" $false "dry-run failed (exit $exit)"
+        }
+    }
 # Summary
 $pass  = @($script:Checks | Where-Object { $_.Pass }).Count
 $fail  = @($script:Checks | Where-Object { -not $_.Pass }).Count

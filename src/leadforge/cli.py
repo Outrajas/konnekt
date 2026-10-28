@@ -1052,6 +1052,65 @@ def draft_e2e_command(
     )
 
 
+@app.command("e2e")
+def e2e_command(
+    profile: Annotated[
+        str, typer.Option("--profile", help="Profile track.")
+    ] = "ai_ml",
+    board: Annotated[
+        str | None,
+        typer.Option("--board", help="Optional board for discovery (wellfound)."),
+    ] = None,
+    max_companies: Annotated[
+        int, typer.Option("--max-companies", min=1)
+    ] = 3,
+    max_people: Annotated[
+        int, typer.Option("--max-people", min=1)
+    ] = 5,
+    max_drafts: Annotated[
+        int, typer.Option("--max-drafts", min=1)
+    ] = 5,
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Run offline (no network/LLM), skip persistence."
+    ),
+) -> None:
+    """Run the full pipeline: discover -> intel -> people -> email -> draft -> review CSV."""
+    import asyncio as _asyncio
+
+    from leadforge.stages.e2e import run_full_e2e
+
+    result = _asyncio.run(
+        run_full_e2e(
+            settings,
+            profile_id=profile,
+            board=board,
+            max_companies=max_companies,
+            max_people=max_people,
+            max_drafts=max_drafts,
+            dry_run=dry_run,
+        )
+    )
+
+    table = Table(title=f"E2E pipeline (profile={profile})", show_header=True)
+    table.add_column("stage", style="cyan")
+    table.add_column("ok", justify="center")
+    table.add_column("detail", overflow="fold", max_width=60)
+
+    for s in result.stages:
+        table.add_row(
+            s.name,
+            "[green]yes[/]" if s.ok else "[red]no[/]",
+            s.detail,
+        )
+
+    console.print(table)
+
+    if result.review_csv:
+        console.print(f"[bold]Review CSV:[/] {result.review_csv}")
+    if not result.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("people")
 def people(
     company: str = typer.Option(..., "--company"),
