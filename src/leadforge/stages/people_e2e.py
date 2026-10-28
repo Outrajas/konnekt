@@ -96,7 +96,20 @@ def _upsert_person(
     candidate: PersonCandidate,
     profile_id: str,
 ) -> bool:
-    """Insert or update. Returns True if a new row was created."""
+    """Insert or update. Returns True if a new row was created.
+
+    Belt-and-suspenders validation: even if the upstream parser produced a
+    questionable name, refuse to persist anything that fails the strict
+    name check. Protects against future parser regressions producing nav
+    garbage that would clutter the person table.
+    """
+    from leadforge.sources.people import _has_role_keyword, _is_probable_name
+
+    if not _is_probable_name(candidate.name):
+        return False
+    # A real person at a real company has a role. Nav headings don't.
+    if not candidate.title or not _has_role_keyword(candidate.title):
+        return False
     first, last = _split_name(candidate.name)
     if not first:
         return False
@@ -131,6 +144,117 @@ def _upsert_person(
     return True
 
 
+async def find_people_via_search(
+    company: str,
+    domain: str,
+    *,
+    settings,
+    fetcher=None,
+    max_results: int = 15,
+) -> list[PersonCandidate]:
+    """Search for public profiles; parse LinkedIn-style snippets into candidates.
+
+    Provider preference (matches cli.py's `people` command):
+      1. SearxNG  - if settings.searxng_base_url is set (reliable)
+      2. DDG      - as fallback (often bot-checked in 2026; we surface
+                    the warning and return [] so the caller can try agent)
+
+    Errors are logged (not swallowed silently) so failures are diagnosable.
+    """
+    import logging as _logging
+
+    from leadforge.sources.search import (
+        DuckDuckGoProvider,
+        SearxngProvider,
+        dedupe_people,
+        parse_person_snippet,
+        person_query,
+    )
+    from leadforge.web.fetcher import Fetcher
+
+    log = _logging.getLogger(__name__)
+
+    try:
+        query = person_query(company, domain, settings)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("person_query failed for %r: %s: %s", company, type(exc).__name__, exc)
+        return []
+    if not query:
+        return []
+
+    router = fetcher or Fetcher(settings)
+
+    # Build provider list: SearxNG first if configured, DDG as fallback.
+    # Explicit type annotation: both implementations satisfy SearchProvider.
+    from leadforge.sources.search import SearchProvider as _SearchProvider
+    providers: list[tuple[str, _SearchProvider]] = []
+    searxng_url = getattr(settings, "searxng_base_url", None)
+    if searxng_url:
+        try:
+            providers.append(("searxng", SearxngProvider(searxng_url, fetcher=router)))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("SearxngProvider construction failed: %s", exc)
+    try:
+        providers.append(("ddg", DuckDuckGoProvider(fetcher=router)))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("DuckDuckGoProvider construction failed: %s", exc)
+
+    if not providers:
+        log.warning("no search provider available")
+        return []
+
+    hits: list = []
+    used_provider = ""
+    for name, provider in providers:
+        try:
+            candidate_hits = await provider.search(query)
+        except ValueError as exc:
+            # Provider raises this on unrecognised markup (bot-check page).
+            log.warning(
+                "%s search returned unrecognised markup for %r: %s "
+                "(likely bot-check; try SearxNG: set LEADFORGE_SEARXNG_BASE_URL)",
+                name, company, exc,
+            )
+            continue
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "%s search failed for %r: %s: %s",
+                name, company, type(exc).__name__, exc,
+            )
+            continue
+        if candidate_hits:
+            hits = candidate_hits
+            used_provider = name
+            break
+
+    if not hits:
+        log.info("all search providers returned no hits for %r", company)
+        return []
+
+    log.info("%s returned %d hits for %r", used_provider, len(hits), company)
+
+    people: list[PersonCandidate] = []
+    for hit in hits:
+        try:
+            parsed = parse_person_snippet(hit, expected_company=company)
+        except Exception:  # noqa: BLE001
+            continue
+        if parsed is not None:
+            people.append(parsed)
+
+    if not people:
+        log.info(
+            "search found %d hits but 0 matched person pattern for %r",
+            len(hits), company,
+        )
+        return []
+
+    try:
+        return dedupe_people(people)[:max_results]
+    except Exception:  # noqa: BLE001
+        return people[:max_results]
+
+
 async def find_people_for_company(
     company: str,
     placeholder_domain: str,
@@ -138,11 +262,20 @@ async def find_people_for_company(
     real_domain: str | None = None,
     llm_client=None,
     fetcher=None,
+    settings=None,
+    use_search: bool = True,
+    use_llm: bool = True,
     walker_max_pages: int = 4,
     agent_max_pages: int = 3,
     agent_max_tokens: int = 15_000,
 ) -> tuple[list[PersonCandidate], str, str]:
-    """Return (people, source, note)."""
+    """Return (people, source, note).
+
+    Path order:
+    1. walker  (deterministic team-page parse; cheap)
+    2. search  (DDG dorks for LinkedIn / public profiles; cheap)
+    3. agent   (LLM-guided recursive crawl; expensive)
+    """
     # Resolve domain
     dom = (real_domain or placeholder_domain or "").strip().lower()
     if not dom or dom.endswith(".wellfound"):
@@ -161,7 +294,21 @@ async def find_people_for_company(
     if walker_people:
         return walker_people, "walker", ""
 
-    # Fallback to agent
+    # Path 2: web search (cheap, uses DDG dorks)
+    if use_search and settings is not None:
+        try:
+            search_people = await find_people_via_search(
+                company, dom, settings=settings, fetcher=fetcher, max_results=15
+            )
+        except Exception:  # noqa: BLE001
+            search_people = []
+        if search_people:
+            return search_people, "search", f"{len(search_people)} from DDG"
+
+    # Path 3: LLM-guided agent (expensive)
+    if not use_llm:
+        return [], "no_results", "walker and search empty; LLM disabled"
+
     try:
         result = await find_people_agentic(
             company=company,
@@ -188,6 +335,8 @@ async def run_people_e2e(
     dry_run: bool = False,
     llm_client=None,
     fetcher=None,
+    use_search: bool = True,
+    use_llm: bool = True,
 ) -> PeopleE2EResult:
     """Orchestrate: jobs -> companies -> people -> person table."""
     overrides = load_domain_overrides(domain_overrides_path)
@@ -212,6 +361,26 @@ async def run_people_e2e(
 
     result = PeopleE2EResult()
 
+    # Dry run: when no fetcher is injected, skip network entirely and just
+    # report what would be processed. When the caller injects a fetcher
+    # (tests, replay), run the full path but skip DB persistence.
+    if dry_run and fetcher is None:
+        for row in rows:
+            placeholder = (row["domain"] or "").strip().lower()
+            real_domain = overrides.get(placeholder, "")
+            result.companies.append(
+                CompanyRunResult(
+                    company=row["name"] or "?",
+                    placeholder_domain=placeholder,
+                    real_domain=real_domain or placeholder,
+                    people_found=0,
+                    persisted=0,
+                    source="dry_run",
+                    note="dry run - no network, no persist",
+                )
+            )
+        return result
+
     for row in rows:
         comp_name = row["name"] or "?"
         placeholder = (row["domain"] or "").strip().lower()
@@ -223,6 +392,9 @@ async def run_people_e2e(
             real_domain=real_domain,
             llm_client=llm_client,
             fetcher=fetcher,
+            settings=settings,
+            use_search=use_search,
+            use_llm=use_llm,
         )
 
         persisted = 0

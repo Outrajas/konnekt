@@ -884,6 +884,11 @@ def people_e2e_command(
         "--use-llm/--no-llm",
         help="Use LLM-guided agent fallback when walker returns 0.",
     ),
+    use_search: bool = typer.Option(
+        True,
+        "--search/--no-search",
+        help="Use DDG search for LinkedIn/public profiles when walker returns 0.",
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Do everything except persist person rows."
     ),
@@ -899,7 +904,9 @@ def people_e2e_command(
             profile_id=profile,
             max_companies=max_companies,
             dry_run=dry_run,
-            llm_client=None if use_llm else False,  # False disables LLM path
+            llm_client=None if use_llm else False,
+            use_search=use_search,
+            use_llm=use_llm,
         )
     )
 

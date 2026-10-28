@@ -297,3 +297,71 @@ def test_run_e2e_no_jobs_returns_empty(settings):
     )
     assert result.total_found == 0
     assert result.total_persisted == 0
+# ---------------- validation gate in _upsert_person ----------------
+
+def test_upsert_person_rejects_nav_name(settings):
+    """Person rows with nav-like names must not be persisted."""
+    from leadforge.models import PersonCandidate
+
+    conn = connect(settings.db_path)
+    try:
+        cid = conn.execute(
+            "INSERT INTO company (name, domain, source, created_at) VALUES (?, ?, ?, ?)",
+            ("Augury", "augury.com", "test", "2026-10-27T00:00:00Z"),
+        ).lastrowid
+        cand = PersonCandidate(
+            name="Our Values", title="Head of Talent",  # title good, name bad
+            company="Augury", url="https://augury.com/about",
+            snippet="", source="team-page",
+        )
+        created = _upsert_person(conn, cid, cand, "ai_ml")
+        conn.commit()
+        assert created is False
+        count = conn.execute("SELECT COUNT(*) FROM person").fetchone()[0]
+        assert count == 0
+    finally:
+        conn.close()
+
+
+def test_upsert_person_rejects_no_title(settings):
+    """A real name without a role is suspicious — reject."""
+    from leadforge.models import PersonCandidate
+
+    conn = connect(settings.db_path)
+    try:
+        cid = conn.execute(
+            "INSERT INTO company (name, domain, source, created_at) VALUES (?, ?, ?, ?)",
+            ("Augury", "augury.com", "test", "2026-10-27T00:00:00Z"),
+        ).lastrowid
+        cand = PersonCandidate(
+            name="Jane Smith", title="",  # name good, title missing
+            company="Augury", url="https://augury.com/about",
+            snippet="", source="team-page",
+        )
+        created = _upsert_person(conn, cid, cand, "ai_ml")
+        conn.commit()
+        assert created is False
+    finally:
+        conn.close()
+
+
+def test_upsert_person_rejects_title_without_role(settings):
+    """A title that isn't a role keyword is not accepted."""
+    from leadforge.models import PersonCandidate
+
+    conn = connect(settings.db_path)
+    try:
+        cid = conn.execute(
+            "INSERT INTO company (name, domain, source, created_at) VALUES (?, ?, ?, ?)",
+            ("Augury", "augury.com", "test", "2026-10-27T00:00:00Z"),
+        ).lastrowid
+        cand = PersonCandidate(
+            name="Jane Smith", title="Some Random Text",  # no role keyword
+            company="Augury", url="https://augury.com/about",
+            snippet="", source="team-page",
+        )
+        created = _upsert_person(conn, cid, cand, "ai_ml")
+        conn.commit()
+        assert created is False
+    finally:
+        conn.close()

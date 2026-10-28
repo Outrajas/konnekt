@@ -116,26 +116,54 @@ class ReplaySearchProvider:
 
 
 def parse_person_snippet(hit: SearchHit, expected_company: str = "") -> PersonCandidate | None:
-    """Parse only the search result's title/snippet; never fetch the result URL."""
+    """Parse only the search result's title/snippet; never fetch the result URL.
+
+    Two patterns accepted (LinkedIn uses both):
+      "Jane Smith - Head of Talent at Augury"
+      "Jane Smith - Head of Talent - Augury | LinkedIn"
+    """
     text = " ".join(f"{hit.title} {hit.snippet}".split())
     text = re.sub(r"\s*\|\s*(LinkedIn|X|Twitter)\s*$", "", text, flags=re.IGNORECASE)
+
+    # Pattern 1 (preferred): name - title at Company
     match = re.search(
         r"(?P<name>[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,3})"
-        r"\s*(?:[-–—|])\s*(?P<title>[^|.]{3,100}?)\s+(?:at|@)\s+"
+        r"\s*[-–—|]\s*(?P<title>[^|.]{3,100}?)\s+(?:at|@)\s+"
         r"(?P<company>[A-Z][A-Za-z0-9& .'-]{1,60})",
         text,
     )
-    if not match:
-        return None
-    company = expected_company or match.group("company").strip()
-    return PersonCandidate(
-        name=match.group("name").strip(),
-        title=match.group("title").strip(),
-        company=company,
-        url=hit.url,
-        snippet=hit.snippet,
-        source="search-snippet",
-    )
+    if match:
+        company = expected_company or match.group("company").strip()
+        return PersonCandidate(
+            name=match.group("name").strip(),
+            title=match.group("title").strip(),
+            company=company,
+            url=hit.url,
+            snippet=hit.snippet,
+            source="search-snippet",
+        )
+
+    # Pattern 2 (fallback): name - title - Company [| LinkedIn]
+    if expected_company:
+        match = re.search(
+            r"(?P<name>[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,3})"
+            r"\s*[-–—|]\s*(?P<title>[^|.]{3,80}?)\s*[-–—|]\s*"
+            + re.escape(expected_company)
+            + r"\b",
+            text,
+            re.IGNORECASE,
+        )
+        if match:
+            return PersonCandidate(
+                name=match.group("name").strip(),
+                title=match.group("title").strip(),
+                company=expected_company,
+                url=hit.url,
+                snippet=hit.snippet,
+                source="search-snippet",
+            )
+
+    return None
 
 
 def dedupe_people(people: list[PersonCandidate]) -> list[PersonCandidate]:

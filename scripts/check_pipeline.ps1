@@ -103,7 +103,8 @@ else                          { Add-Check ".env.example present" $false "missing
 if (-not $Quick) {
     # 6. pytest
     $pytestLog = ".diag\pytest_last.log"
-    & $py -m pytest -q --tb=line -p no:cacheprovider 2>&1 | Out-File -FilePath $pytestLog -Encoding utf8
+    $tmpBase = ".pytest_tmp_$((Get-Date).ToString('yyyyMMddHHmmss'))"
+    & $py -m pytest -q --tb=line -p no:cacheprovider --basetemp=$tmpBase 2>&1 | Out-File -FilePath $pytestLog -Encoding utf8
     $pytestExit = $LASTEXITCODE
     $pytestOut = ""
     if (Test-Path $pytestLog) { $pytestOut = (Get-Content $pytestLog -Raw) }
