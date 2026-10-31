@@ -133,3 +133,40 @@ per line. Preview policy and budget scope with `python
 scripts/benchmark_tiers.py --domains data/input/benchmark_domains.txt --dry-run`.
 The live benchmark uses the router and may request Tier 2 only when the
 configured Obscura binary exists; review the domain list before running it.
+
+## Live browser run (Tier 3)
+
+Tier 3 launches a real, headed Chrome using the persistent profile in
+`data/browser-profile`. Sign in to a platform by hand once in that window if you
+want its logged-in surfaces; no command reads, types or stores credentials.
+
+```powershell
+# whole chain, one board at a time, browser on for this shell only
+.\scripts\live_run.ps1
+
+# just the two hardest platforms, different track
+.\scripts\live_run.ps1 -Boards linkedin,indeed -Profile swe
+
+# everything except the browser and the network
+.\scripts\live_run.ps1 -DryRun
+```
+
+Equivalent manual sequence:
+
+```powershell
+$env:LEADFORGE_BROWSER_ENABLED = "true"
+leadforge doctor                       # reports the Tier-3 engine
+leadforge e2e --profile ai_ml --board linkedin
+leadforge e2e --profile ai_ml --board indeed
+leadforge report --since 7
+leadforge export-run-summary
+```
+
+If a challenge page appears, clear it in the visible window within
+`LEADFORGE_BROWSER_MANUAL_CHALLENGE_WAIT_S` seconds (default 90). If it is not
+cleared, the fetch fails and the host is paused like any other block. Nothing
+solves challenges programmatically.
+
+Set `LEADFORGE_BROWSER_HEADED=false` for an unattended run, and
+`LEADFORGE_BROWSER_CHANNEL=` (empty) to use Playwright's bundled Chromium
+instead of the installed Chrome.

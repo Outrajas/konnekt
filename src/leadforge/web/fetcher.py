@@ -122,7 +122,11 @@ class Fetcher:
                     response = await http.fetch(normalized, self.settings, use_httpx=True)
             except TierUnavailable as exc:
                 # A rendering tier that is configured but unusable (no binary, no
-                # browser, process switch off) must degrade, not crash the run.
+                # browser, process switch off) must not block a better tier above
+                # it: skip to the next one, and only fail when nothing is left.
+                if tier < ceiling:
+                    tier += 1
+                    continue
                 raise FetchFailed(f"Fetch failed for {host}: {exc}") from exc
             except (TimeoutError, OSError, httpx.HTTPError) as exc:
                 if not retry_errors:
