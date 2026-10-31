@@ -75,3 +75,7 @@ scripts/repair_*.py
 scripts/restore_*.py
 scripts/cleanup_*.py
 scripts/test_*.py
+
+# Tier-3 browser profile (contains session state; never commit)
+data/browser-profile/
+

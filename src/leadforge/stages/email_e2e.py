@@ -20,6 +20,7 @@ from leadforge.config import Settings
 from leadforge.db import connect, init_schema
 from leadforge.models import Contact, EmailCandidate
 from leadforge.scoring import evidence_tier, is_sendable, score
+from leadforge.sources.domains import sql_synthetic_filter
 from leadforge.tools.email_patterns import generate, rank_patterns
 
 log = logging.getLogger(__name__)
@@ -184,9 +185,7 @@ async def run_email_e2e(
         rows = conn.execute(
             "SELECT p.*, c.name AS company_name, c.domain AS company_domain "
             "FROM person p JOIN company c ON c.id=p.company_id "
-            "WHERE c.domain IS NOT NULL AND c.domain != '' "
-            "AND c.domain NOT LIKE '%.wellfound' "
-            "ORDER BY c.name, p.id"
+            "WHERE 1=1 " + sql_synthetic_filter("c.domain") + "ORDER BY c.name, p.id"
         ).fetchall()
     finally:
         conn.close()

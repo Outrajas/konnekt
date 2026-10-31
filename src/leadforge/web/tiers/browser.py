@@ -17,10 +17,20 @@ Guardrails that stay on
   wait) instead of being solved programmatically.
 * Every navigation still goes through the router's budget, cache, policy and
   run-log bookkeeping; this module only replaces the transport.
+
+Engine selection
+----------------
+Patchright is preferred because it removes the ``Runtime.enable``/CDP artefacts
+anti-bot vendors fingerprint. A Patchright install that has no browser build
+downloaded (``patchright install chromium`` never run) is useless on its own, so
+startup walks a ladder: patchright → playwright, and configured ``channel`` →
+bundled Chromium. The first combination that launches wins, and the reason the
+others failed is kept for the error message.
 """
 
 from __future__ import annotations
 
+import importlib
 import logging
 
 from leadforge.web.errors import FetchFailed, TierUnavailable
@@ -43,27 +53,31 @@ CHALLENGE_MARKERS = (
 _SESSION: BrowserSession | None = None
 
 
-def _load_engine(preferred: str = "auto"):
-    """Return the Playwright-compatible async API, preferring Patchright."""
-    order = ("patchright", "playwright") if preferred == "auto" else (preferred,)
-    errors = []
-    for name in order:
-        try:
-            module = __import__(f"{name}.async_api", fromlist=["async_api"])
-        except ImportError as exc:  # pragma: no cover - depends on install
-            errors.append(f"{name}: {exc}")
-            continue
-        return module
-    raise TierUnavailable("No browser engine installed (" + "; ".join(errors) + ")")
+def _engine_order(preferred: str = "auto") -> tuple[str, ...]:
+    return (preferred,) if preferred != "auto" else ("patchright", "playwright")
+
+
+def _load_engine(name: str):
+    """Import one engine's async API module, or raise ImportError."""
+    module = importlib.import_module(f"{name}.async_api")
+    if not hasattr(module, "async_playwright"):
+        raise ImportError(f"{name}.async_api has no async_playwright")
+    return module
 
 
 def engine_status(preferred: str = "auto") -> dict[str, object]:
-    """Report which engine would be used, without launching anything."""
-    try:
-        module = _load_engine(preferred)
-    except TierUnavailable as exc:
-        return {"available": False, "engine": None, "detail": str(exc)}
-    return {"available": True, "engine": module.__name__.split(".")[0], "detail": "ok"}
+    """Report which engines are importable, without launching anything."""
+    importable, errors = [], []
+    for name in _engine_order(preferred):
+        try:
+            _load_engine(name)
+        except ImportError as exc:  # pragma: no cover - depends on install
+            errors.append(f"{name}: {exc}")
+            continue
+        importable.append(name)
+    if not importable:
+        return {"available": False, "engine": None, "detail": "; ".join(errors)}
+    return {"available": True, "engine": importable[0], "detail": ",".join(importable)}
 
 
 def looks_like_challenge(html: str) -> bool:
@@ -90,16 +104,15 @@ class BrowserSession:
     def __init__(self, settings) -> None:
         self.settings = settings
         self._engine = None
+        self._playwright = None
         self._context = None
         self._pages = 0
+        self._launch_notes: list[str] = []
 
-    async def start(self):
-        if self._context is not None:
-            return self._context
-        self._engine = _load_engine(self.settings.browser_engine)
+    def _context_options(self, channel: str | None) -> dict:
         profile = self.settings.browser_profile_dir
         profile.mkdir(parents=True, exist_ok=True)
-        options = {
+        options: dict = {
             "user_data_dir": str(profile),
             "headless": not self.settings.browser_headed,
             "locale": self.settings.browser_locale,
@@ -112,19 +125,58 @@ class BrowserSession:
             "accept_downloads": False,
             "ignore_https_errors": False,
         }
-        if self.settings.browser_channel:
-            options["channel"] = self.settings.browser_channel
+        if channel:
+            options["channel"] = channel
         if self.settings.browser_user_agent:
             options["user_agent"] = self.settings.browser_user_agent
-        try:
-            self._context = await self._engine.chromium.launch_persistent_context(**options)
-        except Exception as exc:  # noqa: BLE001 - surfaced as a tier failure
-            raise TierUnavailable(f"Browser launch failed: {exc}") from exc
-        if callable(getattr(self._context, "set_default_timeout", None)):
-            self._context.set_default_timeout(int(self.settings.browser_timeout_seconds * 1000))
-        log.info("tier3 browser started engine=%s headed=%s",
-                 self._engine.__name__, self.settings.browser_headed)
-        return self._context
+        return options
+
+    def _channel_candidates(self) -> tuple[str | None, ...]:
+        configured = self.settings.browser_channel or None
+        return (configured, None) if configured else (None,)
+
+    async def start(self):
+        if self._context is not None:
+            return self._context
+        for engine_name in _engine_order(self.settings.browser_engine):
+            try:
+                module = _load_engine(engine_name)
+            except ImportError as exc:
+                self._launch_notes.append(f"{engine_name}: {exc}")
+                continue
+            for channel in self._channel_candidates():
+                try:
+                    playwright = await module.async_playwright().start()
+                except Exception as exc:  # noqa: BLE001
+                    self._launch_notes.append(f"{engine_name}: start failed: {exc}")
+                    break
+                try:
+                    context = await playwright.chromium.launch_persistent_context(
+                        **self._context_options(channel)
+                    )
+                except Exception as exc:  # noqa: BLE001 - try the next rung
+                    self._launch_notes.append(
+                        f"{engine_name}/channel={channel}: {str(exc).splitlines()[0][:180]}"
+                    )
+                    try:
+                        await playwright.stop()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    continue
+                self._engine, self._playwright, self._context = module, playwright, context
+                if callable(getattr(context, "set_default_timeout", None)):
+                    context.set_default_timeout(
+                        int(self.settings.browser_timeout_seconds * 1000)
+                    )
+                log.info(
+                    "tier3 browser started engine=%s channel=%s headed=%s",
+                    engine_name,
+                    channel,
+                    self.settings.browser_headed,
+                )
+                return context
+        detail = " | ".join(self._launch_notes[-4:]) or "no engine available"
+        raise TierUnavailable(f"Browser launch failed: {detail}")
 
     async def navigate(self, url: str) -> RawResponse:
         context = await self.start()
@@ -144,9 +196,7 @@ class BrowserSession:
                     raise FetchFailed("Challenge was not cleared inside the wait window")
             status = getattr(response, "status", 200) if response is not None else 200
             final_url = getattr(page, "url", url) or url
-        except TierUnavailable:
-            raise
-        except FetchFailed:
+        except (TierUnavailable, FetchFailed):
             raise
         except Exception as exc:  # noqa: BLE001 - transport errors are fetch errors
             raise FetchFailed(f"Browser navigation failed for {url}: {exc}") from exc
@@ -179,9 +229,15 @@ class BrowserSession:
                 body = await page.content()
             except Exception:  # noqa: BLE001 - page may be navigating
                 break
-        if looks_like_challenge(body):
-            raise FetchFailed("Challenge was not cleared inside the wait window")
         return body
+
+    async def _stop_playwright(self) -> None:
+        if self._playwright is not None:
+            try:
+                await self._playwright.stop()
+            except Exception:  # noqa: BLE001 - teardown must not raise
+                pass
+            self._playwright = None
 
     async def close(self) -> None:
         if self._context is not None:
@@ -189,6 +245,7 @@ class BrowserSession:
                 await self._context.close()
             finally:
                 self._context = None
+        await self._stop_playwright()
 
 
 async def get_session(settings) -> BrowserSession:
