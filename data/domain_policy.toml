@@ -1,36 +1,42 @@
-# Conservative per-domain budgets in seconds. Tier 3 is unavailable by default.
+# Per-domain budgets in seconds. Tier 3 (headed browser) is reachable but only
+# actually runs when LEADFORGE_BROWSER_ENABLED=true; leaving it false keeps the
+# baseline behaviour (Tier 1/2 only) with no code change.
 ["default"]
 min_delay_s = 3.0
 max_delay_s = 8.0
 daily_cap = 30
-max_tier = 2
+max_tier = 3
 obey_robots = true
 allow_challenge_solving = false
+allow_browser = true
 enabled = true
 
 ["linkedin.com"]
 enabled = true
-min_delay_s = 30.0
-max_delay_s = 90.0
-daily_cap = 10
-max_tier = 1
+min_delay_s = 10
+max_delay_s = 25
+daily_cap = 120
+max_tier = 3
 allow_challenge_solving = false
+allow_browser = true
 
 ["glassdoor.com"]
 enabled = true
-min_delay_s = 30.0
-max_delay_s = 90.0
-daily_cap = 10
-max_tier = 1
+min_delay_s = 10
+max_delay_s = 25
+daily_cap = 80
+max_tier = 3
 allow_challenge_solving = false
+allow_browser = true
 
 ["indeed.com"]
 enabled = true
-min_delay_s = 30.0
-max_delay_s = 90.0
-daily_cap = 10
-max_tier = 1
+min_delay_s = 8
+max_delay_s = 20
+daily_cap = 120
+max_tier = 3
 allow_challenge_solving = false
+allow_browser = true
 
 ["duckduckgo.com"]
 enabled = true

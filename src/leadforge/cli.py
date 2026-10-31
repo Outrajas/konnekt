@@ -184,6 +184,17 @@ def doctor() -> None:
             )
         else:
             console.print("  Remedy: No action needed; outbound port 25 is reachable.")
+    from leadforge.web.tiers.browser import engine_status
+
+    browser_state = engine_status(settings.browser_engine)
+    console.print(
+        f"[bold]Tier 3 browser:[/] "
+        f"{'enabled' if settings.browser_enabled else 'disabled'} "
+        f"(engine={browser_state['engine'] or 'none'}, "
+        f"{'headed' if settings.browser_headed else 'headless'})"
+    )
+    if settings.browser_enabled and not browser_state["available"]:
+        console.print(f"[bold yellow]Warning:[/] {browser_state['detail']}")
     console.print()
 
 
@@ -741,6 +752,19 @@ def discover(
             from leadforge.sources.naukri import fetch_naukri_jobs
             return await fetch_naukri_jobs(profile, fetcher=fetcher)
 
+
+        async def _linkedin(profile, *, fetcher):
+            from leadforge.sources.linkedin import fetch_linkedin_jobs
+            return await fetch_linkedin_jobs(profile, fetcher=fetcher)
+
+        async def _indeed(profile, *, fetcher):
+            from leadforge.sources.indeed import fetch_indeed_jobs
+            return await fetch_indeed_jobs(profile, fetcher=fetcher)
+
+        async def _glassdoor(profile, *, fetcher):
+            from leadforge.sources.glassdoor import fetch_glassdoor_jobs
+            return await fetch_glassdoor_jobs(profile, fetcher=fetcher)
+
         board_fetchers = {
             "wellfound": _wellfound,
             "instahyre": _instahyre,
@@ -756,6 +780,9 @@ def discover(
             "yc": _yc,
             "wtj": _wtj,
             "naukri": _naukri,
+            "linkedin": _linkedin,
+            "indeed": _indeed,
+            "glassdoor": _glassdoor,
         }
 
         for board_name in board:

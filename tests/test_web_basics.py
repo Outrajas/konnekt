@@ -139,18 +139,27 @@ async def test_budget_spacing_and_independent_host_locks(tmp_path) -> None:
     assert not any(key[0] == id(asyncio.get_running_loop()) for key in Budget._locks)
 
 
-def test_default_policy_never_allows_tier_three() -> None:
+def test_default_policy_keeps_tier_three_off_and_platforms_require_opt_in() -> None:
     from leadforge.config import settings
 
     policy = DomainPolicy.load(settings.domain_policy_path)
-    assert policy.default.max_tier < 3
+    # The default rule may *reach* Tier 3, but the process switch
+    # (LEADFORGE_BROWSER_ENABLED) defaults to off, so nothing launches a browser
+    # unless the operator asks for it.
+    assert policy.default.max_tier == 3
+    assert policy.default.allow_browser is True
+    assert settings.browser_enabled is False
     assert not policy.default.allow_challenge_solving
     assert policy.budget_key("jobs.linkedin.com") == "linkedin.com"
     for platform in ("linkedin.com", "indeed.com", "glassdoor.com"):
         rule = policy.resolve(platform)
-        assert rule.enabled and rule.max_tier == 1
+        # The browser tier is allowed for the big platforms, but only because
+        # the operator opted in per domain; challenge solving stays off and
+        # the process-level switch (LEADFORGE_BROWSER_ENABLED) is still needed.
+        assert rule.enabled and rule.max_tier == 3
+        assert rule.allow_browser is True
         assert not rule.allow_challenge_solving
-        assert rule.daily_cap == 10
+        assert rule.daily_cap >= 10
 
 
 def test_obscura_argv_is_a_list_and_tier_three_stays_disabled() -> None:

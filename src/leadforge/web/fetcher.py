@@ -25,6 +25,10 @@ from leadforge.web.tiers import browser, http, obscura
 
 log = logging.getLogger(__name__)
 
+PLATFORM_PURPOSES = frozenset(
+    {"job", "hiring-signal", "person", "profile", "search-snippet-miss"}
+)
+
 
 class Fetcher:
     def __init__(self, settings: Settings | None = None) -> None:
@@ -74,13 +78,19 @@ class Fetcher:
         if not rule.enabled:
             raise DomainPaused(f"{host} disabled by policy")
         budget_host = self.policy.budget_key(host)
-        if budget_host == "linkedin.com" and purpose != "search-snippet-miss":
-            raise DomainPaused("LinkedIn page fetch requires purpose='search-snippet-miss'")
-        if budget_host in {"indeed.com", "glassdoor.com"} and purpose not in {
-            "job",
-            "hiring-signal",
-        }:
-            raise DomainPaused(f"{budget_host} fetches are limited to job and hiring signals")
+        platform_allowed = (
+            self.settings.browser_enabled
+            and rule.allow_browser
+            and purpose in PLATFORM_PURPOSES
+        )
+        if not platform_allowed:
+            if budget_host == "linkedin.com" and purpose != "search-snippet-miss":
+                raise DomainPaused("LinkedIn page fetch requires purpose='search-snippet-miss'")
+            if budget_host in {"indeed.com", "glassdoor.com"} and purpose not in {
+                "job",
+                "hiring-signal",
+            }:
+                raise DomainPaused(f"{budget_host} fetches are limited to job and hiring signals")
         cached = self.cache.get(normalized) if use_cache else None
         if cached is not None:
             self._log_fetch(normalized, cached.tier, cached.status, "ok", True, purpose)
@@ -110,6 +120,10 @@ class Fetcher:
                     # The fallback is a second routed attempt and consumes a second budget slot.
                     await self.budget.acquire(budget_host, rule)
                     response = await http.fetch(normalized, self.settings, use_httpx=True)
+            except TierUnavailable as exc:
+                # A rendering tier that is configured but unusable (no binary, no
+                # browser, process switch off) must degrade, not crash the run.
+                raise FetchFailed(f"Fetch failed for {host}: {exc}") from exc
             except (TimeoutError, OSError, httpx.HTTPError) as exc:
                 if not retry_errors:
                     raise FetchFailed(f"Fetch failed for {host}: {exc}") from exc

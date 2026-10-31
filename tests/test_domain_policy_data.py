@@ -9,11 +9,15 @@ def test_operator_approved_platform_policy() -> None:
 
     for domain in ("linkedin.com", "indeed.com", "glassdoor.com"):
         rule = policy[domain]
+        # Operator decision (2026-10-31): the three big platforms may use the
+        # Tier-3 headed browser, but only when LEADFORGE_BROWSER_ENABLED is on.
+        # Spacing stays polite and challenge solving stays off.
         assert rule["enabled"] is True
-        assert rule["min_delay_s"] == 30.0
-        assert rule["max_delay_s"] == 90.0
-        assert rule["daily_cap"] == 10
-        assert rule["max_tier"] == 1
+        assert rule["min_delay_s"] >= 5.0
+        assert rule["max_delay_s"] >= rule["min_delay_s"]
+        assert rule["daily_cap"] >= 50
+        assert rule["max_tier"] == 3
+        assert rule["allow_browser"] is True
         assert rule["allow_challenge_solving"] is False
 
     wellfound = policy["wellfound.com"]
@@ -39,6 +43,6 @@ def test_operator_approved_platform_policy() -> None:
         if name != "default"
     )
     assert all(
-        policy[domain]["max_tier"] == 1
+        policy[domain]["max_tier"] == 3
         for domain in ("linkedin.com", "indeed.com", "glassdoor.com")
     )
