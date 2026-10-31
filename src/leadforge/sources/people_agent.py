@@ -249,7 +249,7 @@ async def _call_decision(
             return decision, _estimate_tokens(decision)
         raise RuntimeError(f"unexpected response type: {type(resp).__name__}")
 
-    # Case 2: no client — use the real module function
+    # Case 2: no client - use the real module function
     from leadforge.llm import chat_json as real_chat_json
 
     resp = real_chat_json(system, user, schema=AgentDecision)

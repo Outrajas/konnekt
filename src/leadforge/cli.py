@@ -591,6 +591,17 @@ def discover(
         "--board-india-entry/--no-board-india-entry",
         help="Also require entry-level titles for India jobs (default: on).",
     ),
+    strict_entry: bool = typer.Option(
+        False,
+        "--strict-entry",
+        help="Only accept jobs whose title explicitly says Junior/Entry/Intern/Grad.",
+    ),
+    smart: bool = typer.Option(
+        False,
+        "--smart",
+        help="Use LLM to classify each job (level, india_eligible, resume_match). "
+        "Slower (~1s/job) but reads descriptions. Requires Groq configured.",
+    ),
 ) -> None:
     """Find public jobs from company sites, HN, and/or boards; dry-run makes no requests."""
     from leadforge.sources.wellfound import fetch_wellfound_jobs
@@ -604,6 +615,9 @@ def discover(
             f"(got {board_entry_level!r})"
         )
         raise typer.Exit(code=2)
+    # --strict-entry is a convenience override
+    if strict_entry:
+        board_entry_level = "strict"
 
     if companies is None and not skip_companies:
         console.print(
@@ -665,18 +679,120 @@ def discover(
                 collected.extend(
                     await discover_hn_signals(company_rows, op_profile)
                 )
+        # Board dispatch table: name -> async fetcher(profile, fetcher=...)
+        async def _wellfound(profile, *, fetcher):
+            return await fetch_wellfound_jobs(
+                profile,
+                fetcher=fetcher,
+                india=board_india,
+                entry_level_mode=board_entry_level,
+                india_requires_entry=board_india_entry,
+            )
+
+        async def _instahyre(profile, *, fetcher):
+            from leadforge.sources.instahyre import fetch_instahyre_jobs
+            return await fetch_instahyre_jobs(profile, fetcher=fetcher)
+
+        async def _remotive(profile, *, fetcher):
+            from leadforge.sources.remotive import fetch_remotive_jobs
+            return await fetch_remotive_jobs(profile, fetcher=fetcher)
+
+        async def _remoteok(profile, *, fetcher):
+            from leadforge.sources.remoteok import fetch_remoteok_jobs
+            return await fetch_remoteok_jobs(profile, fetcher=fetcher)
+
+        async def _himalayas(profile, *, fetcher):
+            from leadforge.sources.himalayas import fetch_himalayas_jobs
+            return await fetch_himalayas_jobs(profile, fetcher=fetcher)
+
+        async def _unstop(profile, *, fetcher):
+            from leadforge.sources.unstop import fetch_unstop_jobs
+            return await fetch_unstop_jobs(profile, fetcher=fetcher)
+
+        async def _weworkremotely(profile, *, fetcher):
+            from leadforge.sources.weworkremotely import fetch_wwr_jobs
+            return await fetch_wwr_jobs(profile, fetcher=fetcher)
+
+        async def _hirist(profile, *, fetcher):
+            from leadforge.sources.hirist import fetch_hirist_jobs
+            return await fetch_hirist_jobs(profile, fetcher=fetcher)
+
+        async def _cutshort(profile, *, fetcher):
+            from leadforge.sources.cutshort import fetch_cutshort_jobs
+            return await fetch_cutshort_jobs(profile, fetcher=fetcher)
+
+        async def _foundit(profile, *, fetcher):
+            from leadforge.sources.foundit import fetch_foundit_jobs
+            return await fetch_foundit_jobs(profile, fetcher=fetcher)
+
+        async def _hn(profile, *, fetcher):
+            from leadforge.sources.hn import fetch_hn_jobs
+            return await fetch_hn_jobs(profile, fetcher=fetcher)
+
+        async def _yc(profile, *, fetcher):
+            from leadforge.sources.yc import fetch_yc_jobs
+            return await fetch_yc_jobs(profile, fetcher=fetcher)
+
+        async def _wtj(profile, *, fetcher):
+            from leadforge.sources.wtj import fetch_wtj_jobs
+            return await fetch_wtj_jobs(profile, fetcher=fetcher)
+
+        async def _naukri(profile, *, fetcher):
+            from leadforge.sources.naukri import fetch_naukri_jobs
+            return await fetch_naukri_jobs(profile, fetcher=fetcher)
+
+        board_fetchers = {
+            "wellfound": _wellfound,
+            "instahyre": _instahyre,
+            "remotive": _remotive,
+            "remoteok": _remoteok,
+            "himalayas": _himalayas,
+            "unstop": _unstop,
+            "weworkremotely": _weworkremotely,
+            "hirist": _hirist,
+            "cutshort": _cutshort,
+            "foundit": _foundit,
+            "hn": _hn,
+            "yc": _yc,
+            "wtj": _wtj,
+            "naukri": _naukri,
+        }
+
         for board_name in board:
-            if board_name == "wellfound":
-                wf_jobs = await fetch_wellfound_jobs(
-                    op_profile,
-                    fetcher=fetcher,
-                    india=board_india,
-                    entry_level_mode=board_entry_level,
-                    india_requires_entry=board_india_entry,
-                )
-                collected.extend(wf_jobs)
-            else:
+            fetcher_fn = board_fetchers.get(board_name)
+            if fetcher_fn is None:
                 console.print(f"[yellow]unknown board:[/] {board_name}")
+                continue
+            try:
+                board_jobs = await fetcher_fn(op_profile, fetcher=fetcher)
+                raw_count = len(board_jobs)
+                if smart:
+                    # --smart: no pre-filter. LLM classifies first, then SQL
+                    # filter in _run_job_intel picks the accepted subset.
+                    collected.extend(board_jobs)
+                    console.print(
+                        f"  {board_name}: {raw_count} jobs (LLM will filter)"
+                    )
+                else:
+                    # Non-smart: regex filter (existing behavior)
+                    from leadforge.sources.wellfound import (
+                        filter_jobs_for_operator as _filter_ops,
+                    )
+                    board_jobs = _filter_ops(
+                        board_jobs,
+                        entry_level_mode=board_entry_level,
+                        india_requires_entry_level=board_india_entry,
+                    )
+                    collected.extend(board_jobs)
+                    if raw_count != len(board_jobs):
+                        console.print(
+                            f"  {board_name}: {len(board_jobs)} jobs "
+                            f"(filtered from {raw_count})"
+                        )
+                    else:
+                        console.print(f"  {board_name}: {len(board_jobs)} jobs")
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"  {board_name}: error {type(exc).__name__}: {exc}")
         seen: set[str] = set()
         unique: list = []
         for j in collected:
@@ -693,12 +809,22 @@ def discover(
     console.print(f"Discovered {len(jobs)} jobs -> {output_path}")
 
     if intel:
-        _run_job_intel(jobs, profile or "default", settings)
+        _run_job_intel(jobs, profile or "default", settings, smart=smart)
 
 
 
-def _run_job_intel(jobs: list, profile_id: str, settings) -> None:
-    """Persist + enrich + reputation-score the given jobs; print a ranked table."""
+def _run_job_intel(
+    jobs: list, profile_id: str, settings, *, smart: bool = False
+) -> None:
+    """Persist + enrich + reputation-score the given jobs; print a ranked table.
+
+    Order matters:
+      1. persist_jobs        -> creates job rows, returns id mapping
+      2. LLM classification  -> updates seniority / india_eligible on those rows
+      3. enrich_job_row      -> regex extraction (salary, tech)
+      4. compute reputation  -> arithmatic
+      5. query + display     -> reads final state
+    """
     import json
 
     from rich.table import Table
@@ -713,7 +839,32 @@ def _run_job_intel(jobs: list, profile_id: str, settings) -> None:
         console.print("[yellow]intel: no jobs to enrich[/]")
         return
 
-    for jid in url_to_id.values():
+    job_ids = list(url_to_id.values())
+
+    # Step 2: LLM classification on the JUST-PERSISTED job IDs
+    if smart:
+        console.print("[cyan]LLM classification running...[/]")
+        try:
+            import asyncio as _asyncio
+
+            from leadforge.stages.job_intel_llm import enrich_jobs_with_llm
+            llm_stats = _asyncio.run(
+                enrich_jobs_with_llm(
+                    settings,
+                    profile_id=profile_id,
+                    job_ids=job_ids,
+                    max_jobs=len(job_ids),
+                )
+            )
+            console.print(
+                f"  LLM classified {llm_stats['classified']} jobs "
+                f"({llm_stats['errors']} errors)"
+            )
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow]LLM classification failed:[/] {exc}")
+
+    # Step 3: Regex extraction (salary, tech stack) - runs after LLM
+    for jid in job_ids:
         enrich_job_row(jid, settings)
 
     domains = sorted({j.domain.strip().lower() for j in jobs if j.domain})
@@ -722,13 +873,30 @@ def _run_job_intel(jobs: list, profile_id: str, settings) -> None:
     conn = connect(settings.db_path)
     try:
         placeholders = ",".join("?" * len(url_to_id))
-        rows = conn.execute(
-            f"SELECT j.*, c.domain AS company_domain, c.name AS company_name "
-            f"FROM job j JOIN company c ON c.id = j.company_id "
-            f"WHERE j.id IN ({placeholders}) "
-            f"ORDER BY j.reputation_score DESC, j.salary_min DESC",
-            list(url_to_id.values()),
-        ).fetchall()
+        if smart:
+            # Filter by LLM classification: junior/mid + India-eligible
+            rows = conn.execute(
+                f"SELECT j.*, c.domain AS company_domain, c.name AS company_name "
+                f"FROM job j JOIN company c ON c.id = j.company_id "
+                f"WHERE j.id IN ({placeholders}) "
+                f"AND j.seniority IN ('intern','entry','mid') "
+                f"AND j.india_eligible = 1 "
+                f"ORDER BY j.resume_match_score DESC, j.reputation_score DESC",
+                list(url_to_id.values()),
+            ).fetchall()
+            total_fetched = len(url_to_id)
+            console.print(
+                f"[cyan]LLM filter:[/] {len(rows)} of {total_fetched} jobs pass "
+                f"(level in intern/entry/mid AND india_eligible=yes)"
+            )
+        else:
+            rows = conn.execute(
+                f"SELECT j.*, c.domain AS company_domain, c.name AS company_name "
+                f"FROM job j JOIN company c ON c.id = j.company_id "
+                f"WHERE j.id IN ({placeholders}) "
+                f"ORDER BY j.reputation_score DESC, j.salary_min DESC",
+                list(url_to_id.values()),
+            ).fetchall()
     finally:
         conn.close()
 
@@ -739,6 +907,10 @@ def _run_job_intel(jobs: list, profile_id: str, settings) -> None:
     )
     table.add_column("title", style="cyan", overflow="fold", max_width=40)
     table.add_column("company", style="green")
+    table.add_column("level", justify="center", width=8)
+    table.add_column("IN", justify="center", width=3)
+    if smart:
+        table.add_column("match", justify="right", width=6)
     table.add_column("salary", justify="right")
     table.add_column("tech", justify="right")
     table.add_column("rep", justify="right")
@@ -771,18 +943,48 @@ def _run_job_intel(jobs: list, profile_id: str, settings) -> None:
             ok, reason = False, "no-reputation"
         else:
             ok, reason = is_acceptable(row, rep)
+
+        # --smart: allow good LLM matches even when salary/reputation are missing
+        if smart and not ok:
+            try:
+                match = row["resume_match_score"]
+                india_ok = row["india_eligible"]
+            except (IndexError, KeyError):
+                match, india_ok = None, None
+            if match is not None and match >= 0.65 and india_ok == 1:
+                ok = True
+                reason = f"llm_match:{match:.2f}"
+
         if ok:
             accepted += 1
 
-        table.add_row(
-            row["title"],
-            row["company_name"],
-            salary_str,
-            str(len(tech)),
-            rep_str,
-            "yes" if ok else "no",
-            reason,
-        )
+        # Fetch LLM/seniority fields
+        try:
+            level = row["seniority"] if "seniority" in row.keys() else "?"
+        except (IndexError, KeyError):
+            level = "?"
+        try:
+            india_ok = row["india_eligible"] if "india_eligible" in row.keys() else None
+        except (IndexError, KeyError):
+            india_ok = None
+        india_mark = "yes" if india_ok == 1 else ("no" if india_ok == 0 else "?")
+        if smart:
+            try:
+                match_val = row["resume_match_score"]
+                match_str = f"{match_val:.2f}" if match_val is not None else "-"
+            except (IndexError, KeyError):
+                match_str = "-"
+            table.add_row(
+                row["title"], row["company_name"], level or "?",
+                india_mark, match_str, salary_str, str(len(tech)),
+                rep_str, "yes" if ok else "no", reason,
+            )
+        else:
+            table.add_row(
+                row["title"], row["company_name"], level or "?",
+                india_mark, salary_str, str(len(tech)),
+                rep_str, "yes" if ok else "no", reason,
+            )
 
     console.print(table)
     console.print(
@@ -958,15 +1160,19 @@ def email_e2e_command(
     ),
 ) -> None:
     """Run email discovery for persons with real domains. Writes to email_candidate."""
+    import asyncio as _asyncio
+
     from leadforge.stages.email_e2e import run_email_e2e
 
-    result = run_email_e2e(
-        settings,
-        profile_id=profile,
-        max_companies=max_companies,
-        max_people_per_company=max_people_per_company,
-        smtp_enabled=smtp,
-        dry_run=dry_run,
+    result = _asyncio.run(
+        run_email_e2e(
+            settings,
+            profile_id=profile,
+            max_companies=max_companies,
+            max_people_per_company=max_people_per_company,
+            smtp_enabled=smtp,
+            dry_run=dry_run,
+        )
     )
 
     table = Table(title=f"Email E2E (profile={profile})", show_header=True)
@@ -1109,6 +1315,175 @@ def e2e_command(
         console.print(f"[bold]Review CSV:[/] {result.review_csv}")
     if not result.ok:
         raise typer.Exit(code=1)
+
+
+@app.command("classify-pending")
+def classify_pending_command(
+    profile: Annotated[str, typer.Option("--profile")] = "ai_ml",
+    max_jobs: Annotated[int, typer.Option("--max", min=1)] = 200,
+    batch_size: Annotated[int, typer.Option("--batch", min=1, max=20)] = 5,
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    """LLM-classify pending jobs (seniority=unknown AND not yet classified).
+
+    Batches multiple jobs per LLM call to stay under free-tier limits.
+    Idempotent: re-runs skip already-classified jobs via llm_classified_at.
+    """
+    import asyncio as _asyncio
+
+    from leadforge.stages.job_intel_llm import enrich_jobs_with_llm
+
+    if dry_run:
+        # Show how many are pending
+        conn = connect(settings.db_path)
+        try:
+            init_schema(conn)
+            pending = conn.execute(
+                "SELECT COUNT(*) FROM job WHERE profile_id=? "
+                "AND seniority='unknown' AND llm_classified_at IS NULL",
+                (profile,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        console.print(f"[bold]Pending:[/] {pending} jobs need LLM classification")
+        console.print(
+            f"[bold]Would use:[/] ~{(pending + batch_size - 1) // batch_size} "
+            f"LLM calls (batch={batch_size})"
+        )
+        return
+
+    console.print(f"[cyan]Classifying up to {max_jobs} jobs (batch={batch_size})[/]")
+    stats = _asyncio.run(
+        enrich_jobs_with_llm(
+            settings,
+            profile_id=profile,
+            max_jobs=max_jobs,
+            batch_size=batch_size,
+        )
+    )
+    console.print(
+        f"[bold]Done:[/] {stats['classified']} classified, "
+        f"{stats['errors']} errors, {stats['batches']} LLM calls"
+    )
+
+
+@app.command("e2e-shortlist")
+def e2e_shortlist_command(
+    profile: Annotated[str, typer.Option("--profile")] = "ai_ml",
+    levels: Annotated[str, typer.Option("--levels", help="Comma-separated")] = "intern,entry,mid",
+    min_match: Annotated[float, typer.Option("--min-match", min=0.0, max=1.0)] = 0.4,
+    india_only: bool = typer.Option(True, "--india-only/--all-locations"),
+    max_companies: Annotated[int, typer.Option("--max-companies", min=1)] = 10,
+    max_people_per_company: Annotated[int, typer.Option("--max-people-per-company")] = 5,
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    """Chain: filter jobs by LLM classification → people → email → draft.
+
+    Reads ONLY classified jobs (level + india + match). For each qualifying
+    company, runs the people/email/draft pipeline in order.
+    """
+    import asyncio as _asyncio
+
+    from leadforge.stages.draft_e2e import run_draft_e2e
+    from leadforge.stages.email_e2e import run_email_e2e
+    from leadforge.stages.people_e2e import run_people_e2e
+
+    level_list = [x.strip() for x in levels.split(",") if x.strip()]
+    placeholders = ",".join("?" * len(level_list))
+
+    conn = connect(settings.db_path)
+    try:
+        init_schema(conn)
+        where_india = " AND j.india_eligible = 1 " if india_only else ""
+        query = (
+            f"SELECT DISTINCT c.id, c.name, c.domain "
+            f"FROM job j JOIN company c ON c.id=j.company_id "
+            f"WHERE j.profile_id=? "
+            f"AND j.seniority IN ({placeholders}) "
+            f"AND j.resume_match_score >= ? "
+            f"{where_india}"
+            f"AND c.domain NOT LIKE '%.wellfound' "
+            f"ORDER BY c.name LIMIT ?"
+        )
+        params = [profile] + level_list + [min_match] + [max_companies]
+        companies = conn.execute(query, params).fetchall()
+
+        # Stats
+        total_matching = conn.execute(
+            f"SELECT COUNT(*) FROM job j WHERE j.profile_id=? "
+            f"AND j.seniority IN ({placeholders}) "
+            f"AND j.resume_match_score >= ?"
+            + (" AND j.india_eligible=1 " if india_only else ""),
+            [profile] + level_list + [min_match],
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    console.print(
+        f"[cyan]Shortlist:[/] {len(companies)} companies with "
+        f"{total_matching} matching jobs (level∈{level_list}, "
+        f"match≥{min_match}{' , India-only' if india_only else ''})"
+    )
+    for c in companies:
+        console.print(f"  - {c['name']} ({c['domain']})")
+
+    if dry_run:
+        console.print("[yellow]dry-run: stopping before people/email/draft[/]")
+        return
+
+    if not companies:
+        console.print("[yellow]no companies passed filter — nothing to do[/]")
+        return
+
+    # Stage A: people
+    console.print("\n[cyan]Stage A: people discovery[/]")
+    p_res = _asyncio.run(
+        run_people_e2e(
+            settings,
+            profile_id=profile,
+            max_companies=max_companies,
+            dry_run=False,
+        )
+    )
+    console.print(
+        f"  {p_res.total_found} found, {p_res.total_persisted} new"
+    )
+
+    # Stage B: email
+    console.print("\n[cyan]Stage B: email discovery[/]")
+    e_res = _asyncio.run(
+        run_email_e2e(
+            settings,
+            profile_id=profile,
+            max_companies=max_companies,
+            max_people_per_company=max_people_per_company,
+            smtp_enabled=True,
+            dry_run=False,
+        )
+    )
+    console.print(
+        f"  {e_res.total_candidates} candidates, {e_res.total_sendable} sendable"
+    )
+
+    # Stage C: drafts
+    console.print("\n[cyan]Stage C: draft generation[/]")
+    d_res = _asyncio.run(
+        run_draft_e2e(
+            settings,
+            profile_id=profile,
+            max_people=max_companies * max_people_per_company,
+            dry_run=False,
+        )
+    )
+    console.print(
+        f"  {d_res.total_drafted} drafted, {d_res.total_persisted} persisted"
+    )
+
+    # Stage D: review
+    console.print("\n[cyan]Stage D: review CSV[/]")
+    from leadforge.stages.e2e import _make_review_csv
+    path, n = _make_review_csv(settings, profile)
+    console.print(f"  {n} rows -> {path}")
 
 
 @app.command("people")

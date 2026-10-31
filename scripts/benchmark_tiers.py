@@ -54,7 +54,7 @@ async def benchmark(
             rows.append(BenchmarkRow(domain, "dry-run", classification, None, "not checked"))
             continue
         if not rule.enabled:
-            rows.append(BenchmarkRow(domain, "—", "disabled", None, "no"))
+            rows.append(BenchmarkRow(domain, "-", "disabled", None, "no"))
             continue
         url = f"https://{domain}/{page_path}"
         max_tier = 2 if settings.obscura_path and settings.obscura_path.is_file() else 1
@@ -84,7 +84,7 @@ async def benchmark(
             rows.append(
                 BenchmarkRow(
                     domain,
-                    "—",
+                    "-",
                     type(exc).__name__,
                     round((time.monotonic() - started) * 1000),
                     "no",
@@ -112,7 +112,7 @@ def main() -> None:
             row.domain,
             row.tier,
             row.classification,
-            str(row.latency_ms) if row.latency_ms is not None else "—",
+            str(row.latency_ms) if row.latency_ms is not None else "-",
             row.blocked,
         )
     Console().print(table)

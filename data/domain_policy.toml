@@ -1,5 +1,5 @@
 # Conservative per-domain budgets in seconds. Tier 3 is unavailable by default.
-[default]
+["default"]
 min_delay_s = 3.0
 max_delay_s = 8.0
 daily_cap = 30
@@ -103,3 +103,100 @@ max_delay_s = 15.0
 daily_cap = 40
 max_tier = 2
 allow_challenge_solving = false
+
+["instahyre.com"]
+enabled = true
+daily_cap = 30
+max_tier = 1
+allow_challenge_solving = false
+min_delay_s = 3.0
+
+
+["cutshort.io"]
+enabled = true
+daily_cap = 30
+max_tier = 1
+allow_challenge_solving = false
+min_delay_s = 3.0
+
+
+["hirist.tech"]
+enabled = true
+daily_cap = 30
+max_tier = 1
+allow_challenge_solving = false
+min_delay_s = 3.0
+
+
+["unstop.com"]
+enabled = true
+daily_cap = 20
+max_tier = 1
+allow_challenge_solving = false
+min_delay_s = 5.0
+
+
+["yc-oss.github.io"]
+enabled = true
+daily_cap = 20
+max_tier = 1
+allow_challenge_solving = false
+min_delay_s = 2.0
+
+
+["naukri.com"]
+enabled = true
+daily_cap = 20
+max_tier = 2
+allow_challenge_solving = false
+min_delay_s = 8.0
+
+
+["foundit.in"]
+enabled = true
+daily_cap = 20
+max_tier = 2
+allow_challenge_solving = false
+min_delay_s = 8.0
+
+["remotive.com"]
+enabled = true
+daily_cap = 30
+max_tier = 1
+allow_challenge_solving = false
+min_delay_s = 2.0
+
+["remoteok.com"]
+enabled = true
+daily_cap = 30
+max_tier = 1
+allow_challenge_solving = false
+min_delay_s = 2.0
+
+["himalayas.app"]
+enabled = true
+daily_cap = 30
+max_tier = 1
+allow_challenge_solving = false
+min_delay_s = 3.0
+
+["weworkremotely.com"]
+enabled = true
+daily_cap = 30
+max_tier = 1
+allow_challenge_solving = false
+min_delay_s = 3.0
+
+["startup.jobs"]
+enabled = true
+daily_cap = 20
+max_tier = 1
+allow_challenge_solving = false
+min_delay_s = 3.0
+
+["welcometothejungle.com"]
+enabled = true
+daily_cap = 20
+max_tier = 1
+allow_challenge_solving = false
+min_delay_s = 5.0

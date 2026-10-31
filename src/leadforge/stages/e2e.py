@@ -40,19 +40,22 @@ def _make_review_csv(settings: Settings, profile_id: str) -> tuple[str, int]:
     try:
         init_schema(conn)
         ensure_profiles_schema(conn)
+        # One row per draft; pick the HIGHEST-confidence email per person
         rows = conn.execute(
             "SELECT c.name AS company, c.domain AS domain, "
             "       p.first_name, p.last_name, p.title AS person_title, "
-            "       ec.email, ec.confidence, "
+            "       (SELECT email FROM email_candidate "
+            "        WHERE person_id = p.id ORDER BY confidence DESC LIMIT 1) AS email, "
+            "       (SELECT confidence FROM email_candidate "
+            "        WHERE person_id = p.id ORDER BY confidence DESC LIMIT 1) AS confidence, "
             "       j.title AS job_title, j.location AS job_location, "
             "       d.subject, d.body, d.draft_path "
             "FROM draft d "
             "JOIN person p ON p.id = d.person_id "
             "JOIN company c ON c.id = p.company_id "
-            "LEFT JOIN email_candidate ec ON ec.person_id = p.id "
             "LEFT JOIN job j ON j.id = d.job_id "
             "WHERE (d.profile_id = ? OR d.profile_id IS NULL) "
-            "ORDER BY ec.confidence DESC, c.name, p.last_name"
+            "ORDER BY confidence DESC, c.name, p.last_name"
         , (profile_id,)).fetchall()
     finally:
         conn.close()
@@ -207,7 +210,7 @@ async def run_full_e2e(
     # ─── Stage D: email ─────────────────────────────────────────────────
     try:
         from leadforge.stages.email_e2e import run_email_e2e
-        e_result = run_email_e2e(
+        e_result = await run_email_e2e(
             settings,
             profile_id=profile_id,
             max_companies=max_companies,
@@ -239,9 +242,16 @@ async def run_full_e2e(
             dry_run=dry_run,
             llm_client=llm_client,
         )
+        # Surface any per-person error notes so the summary is diagnostic
+        notes = "; ".join(
+            f"{p.name}: {p.note}" for p in d_result.people if p.note
+        )
+        detail = f"{d_result.total_drafted} drafted, {d_result.total_persisted} persisted"
+        if notes:
+            detail += f" | {notes[:200]}"
         result.stages.append(E2EStageResult(
             name="draft", ok=True,
-            detail=f"{d_result.total_drafted} drafted, {d_result.total_persisted} persisted",
+            detail=detail,
             metrics={
                 "drafted": d_result.total_drafted,
                 "persisted": d_result.total_persisted,

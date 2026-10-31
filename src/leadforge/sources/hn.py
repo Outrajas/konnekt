@@ -1,4 +1,14 @@
-"""Hacker News Firebase parsing helpers; callers inject policy-routed fetches."""
+"""Hacker News Who-is-Hiring helpers: legacy comment parsing plus board adapter.
+
+Two generations of API live here on purpose:
+
+* ``parse_hiring_comment`` / ``hiring_comments`` / ``discover_hiring_posts`` — the
+  original Firebase-based pair used by ``stages.discovery`` and the source tests.
+  The fetch function is injected so callers keep every request on the policy
+  router.
+* ``parse_hn_comments`` / ``fetch_hn_jobs`` — the board-dispatcher adapter added
+  with the 14-board expansion, which reads the Algolia mirror instead.
+"""
 
 from __future__ import annotations
 
@@ -10,10 +20,16 @@ from html import unescape
 from bs4 import BeautifulSoup
 
 from leadforge.models import Job
+from leadforge.seniority import infer_seniority
+from leadforge.web.errors import FetchError
 from leadforge.web.fetcher import Fetcher
 
 FetchJsonFn = Callable[[str], Awaitable[dict | list | None]]
 _EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+ALGOLIA_COMMENTS = (
+    "https://hn.algolia.com/api/v1/search?query=who+is+hiring&tags=comment&hitsPerPage=20"
+)
+ALGOLIA_STORIES = "https://hn.algolia.com/api/v1/search?query=who+is+hiring&tags=story&hitsPerPage=5"
 
 
 def parse_hiring_comment(item: dict, company_hint: str = "") -> Job | None:
@@ -40,6 +56,7 @@ def parse_hiring_comment(item: dict, company_hint: str = "") -> Job | None:
         description=text,
         source="hacker-news",
         invites_email=invite,
+        seniority=infer_seniority(title, text),
     )
 
 
@@ -87,3 +104,49 @@ async def discover_hiring_posts(
         return []
     comments = await hiring_comments(get_json, story, max_comments=max_comments)
     return [job for item in comments if (job := parse_hiring_comment(item)) is not None]
+
+
+# ------------------------------------------------------------------ board adapter
+def parse_hn_comments(raw: str | dict, *, profile=None) -> list[Job]:
+    """Parse Algolia comment hits into jobs (14-board dispatcher adapter)."""
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+    else:
+        data = raw
+
+    hits = data.get("hits", []) if isinstance(data, dict) else []
+    jobs: list[Job] = []
+    for hit in hits:
+        comment_text = hit.get("comment_text") or ""
+        if "engineer" not in comment_text.lower() and "developer" not in comment_text.lower():
+            continue
+        url = f"https://news.ycombinator.com/item?id={hit.get('objectID')}"
+        title = "HN: " + (comment_text[:80].replace("\n", " ") + "...")
+        desc = comment_text[:8000]
+        jobs.append(
+            Job(
+                company="HN Post",
+                domain="hacker-news.test",
+                title=title,
+                url=url,
+                location="Various",
+                description=desc,
+                source="hn-who-is-hiring",
+                remote=False,
+                seniority=infer_seniority(title, desc),
+            )
+        )
+    return jobs
+
+
+async def fetch_hn_jobs(profile, *, fetcher=None) -> list[Job]:
+    """Fetch the Algolia Who-is-Hiring comments through the policy router."""
+    router = fetcher or Fetcher()
+    try:
+        response = await router.fetch(ALGOLIA_COMMENTS, min_tier=1, max_tier=1, purpose="job")
+    except FetchError:
+        return []
+    return parse_hn_comments(response.html or "", profile=profile)

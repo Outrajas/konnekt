@@ -67,8 +67,8 @@ def persist_jobs(
                 cur = conn.execute(
                     "INSERT INTO job("
                     "company_id, title, url, location, employment_type, source, "
-                    "match_score, first_seen, last_seen, profile_id, description"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "match_score, first_seen, last_seen, profile_id, description, seniority"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         company_id,
                         job.title,
@@ -81,19 +81,25 @@ def persist_jobs(
                         now,
                         profile_id,
                         job.description or "",
+                        getattr(job, "seniority", "unknown"),
                     ),
                 )
                 url_to_id[job.url] = cast(int, cur.lastrowid)
                 stats.jobs_created += 1
             else:
+                # Preserve DB seniority when in-memory value is unknown/empty
+                incoming_seniority = getattr(job, "seniority", "unknown")
+                if incoming_seniority in ("unknown", ""):
+                    incoming_seniority = None  # NULL keeps existing DB value
                 conn.execute(
-                    "UPDATE job SET last_seen=?, match_score=?, title=?, description=? "
-                    "WHERE id=?",
+                    "UPDATE job SET last_seen=?, match_score=?, title=?, "
+                    "description=?, seniority=COALESCE(?, seniority) WHERE id=?",
                     (
                         now,
                         job.match_score,
                         job.title,
                         job.description or "",
+                        incoming_seniority,
                         existing["id"],
                     ),
                 )

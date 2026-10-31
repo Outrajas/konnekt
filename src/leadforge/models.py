@@ -76,6 +76,8 @@ class Job(BaseModel):
     fetch_tier: int | None = None
     js_rendered: bool = False
     remote: bool = False
+    # Values: "intern" | "entry" | "mid" | "senior" | "staff" | "lead" | "exec" | "unknown"
+    seniority: str = "unknown"
 
 
 class OperatorProfile(BaseModel):

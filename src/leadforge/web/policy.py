@@ -21,6 +21,7 @@ class DomainRule:
     max_tier: int = 2
     obey_robots: bool = True
     allow_challenge_solving: bool = False
+    allow_browser: bool = False
 
 
 class DomainPolicy:
@@ -86,6 +87,8 @@ def _rule(values: dict[str, object], base: DomainRule) -> DomainRule:
         raise ValueError("Domain policy enabled and obey_robots values must be booleans")
     if not isinstance(rule.allow_challenge_solving, bool):
         raise ValueError("Domain policy allow_challenge_solving must be a boolean")
+    if not isinstance(rule.allow_browser, bool):
+        raise ValueError("Domain policy allow_browser must be a boolean")
     if (
         isinstance(rule.min_delay_s, bool)
         or isinstance(rule.max_delay_s, bool)

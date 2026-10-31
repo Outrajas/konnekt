@@ -321,6 +321,15 @@ if (-not $Quick) {
             Add-Check "e2e CLI" $false "dry-run failed (exit $exit)"
         }
     }
+    # 24. board parsers (5 new + wellfound)
+    $boardImports = "import sys; sys.path.insert(0,'src'); from leadforge.sources.instahyre import fetch_instahyre_jobs; from leadforge.sources.remotive import fetch_remotive_jobs; from leadforge.sources.remoteok import fetch_remoteok_jobs; from leadforge.sources.himalayas import fetch_himalayas_jobs; from leadforge.sources.unstop import fetch_unstop_jobs; print('OK')"
+    $bImpOut = (& $py -c $boardImports 2>&1 | Out-String).Trim()
+    if ($bImpOut -like "OK*") {
+        Add-Check "board parsers" $true "5 modules importable"
+    } else {
+        Add-Check "board parsers" $false $bImpOut
+    }
+
 # Summary
 $pass  = @($script:Checks | Where-Object { $_.Pass }).Count
 $fail  = @($script:Checks | Where-Object { -not $_.Pass }).Count

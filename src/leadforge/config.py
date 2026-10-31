@@ -75,6 +75,25 @@ class Settings(BaseSettings):
         ),
     )
 
+    browser_enabled: bool = False
+    browser_headed: bool = True
+    browser_engine: Literal["auto", "patchright", "playwright"] = "auto"
+    browser_channel: str | None = Field(
+        default="chrome",
+        validation_alias=AliasChoices("BROWSER_CHANNEL", "LEADFORGE_BROWSER_CHANNEL"),
+    )
+    browser_profile_dir: Path = Path("data/browser-profile")
+    browser_timeout_seconds: float = 45.0
+    browser_wait_until: str = "domcontentloaded"
+    browser_settle_ms: int = 1200
+    browser_manual_challenge_wait_s: int = 90
+    browser_locale: str = "en-IN"
+    browser_timezone: str = "Asia/Kolkata"
+    browser_viewport_width: int = 1280
+    browser_viewport_height: int = 900
+    browser_max_pages_per_session: int = 40
+    browser_user_agent: str | None = None
+
     llm_base_url: str | None = Field(
         default=None, validation_alias=AliasChoices("LLM_BASE_URL", "LEADFORGE_LLM_BASE_URL")
     )

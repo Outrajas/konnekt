@@ -199,6 +199,39 @@ def _migration_add_profile_id_columns(conn: sqlite3.Connection) -> None:
 MIGRATIONS.append(_migration_add_profile_id_columns)
 
 
+def _migration_add_job_intel_llm(conn: sqlite3.Connection) -> None:
+    """Add job-intel LLM columns (level, india_eligible, resume_match, reasoning)."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(job)").fetchall()}
+    for name, sqltype in {
+        "seniority": "TEXT",
+        "india_eligible": "INTEGER",
+        "resume_match_score": "REAL",
+        "intel_reasoning": "TEXT",
+    }.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE job ADD COLUMN {name} {sqltype}")
+    conn.commit()
+
+
+MIGRATIONS.append(_migration_add_job_intel_llm)
+
+
+def _migration_add_llm_classified_at(conn: sqlite3.Connection) -> None:
+    """Add llm_classified_at marker so classification is resumable."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(job)").fetchall()}
+    if "llm_classified_at" not in existing:
+        conn.execute("ALTER TABLE job ADD COLUMN llm_classified_at TEXT")
+        # Backfill: rows that already have india_eligible set were classified
+        conn.execute(
+            "UPDATE job SET llm_classified_at = COALESCE(last_seen, '') "
+            "WHERE india_eligible IS NOT NULL"
+        )
+    conn.commit()
+
+
+MIGRATIONS.append(_migration_add_llm_classified_at)
+
+
 def connect(path: str | Path) -> sqlite3.Connection:
     """Open a SQLite database with WAL and foreign-key enforcement enabled."""
     database_path = str(path)

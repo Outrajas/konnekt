@@ -201,7 +201,7 @@ def _template_draft(person: dict, job: dict, company: str, profile: dict) -> Dra
         f"Would you be open to a short conversation about what a strong first "
         f"90 days would look like on the team?\n\n"
         f"I can share a 3-line summary of my relevant experience if that's "
-        f"useful — no pressure either way.\n\n"
+        f"useful - no pressure either way.\n\n"
         f"Thanks for reading,\n\n"
         f"(your name)"
     )
@@ -274,8 +274,10 @@ def _write_draft_file(
     out_dir = settings.output_dir / "drafts"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{_slugify(company)}__{_slugify(person_name)}.md"
-    content = f"# {company} — {person_name}\n\n**Subject:** {subject}\n\n---\n\n{body}\n"
-    path.write_text(content, encoding="utf-8")
+    content = f"# {company} - {person_name}\n\n**Subject:** {subject}\n\n---\n\n{body}\n"
+    # Explicit UTF-8 with newline="\n" to avoid platform EOL + encoding issues
+    with path.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write(content)
     return path
 
 
@@ -436,9 +438,23 @@ async def run_draft_e2e(
         name = f"{job_row['first_name']} {job_row['last_name']}".strip()
         company = job_row["company_name"] or "?"
 
+        # Separate person and job dicts so template/prompt see correct fields
+        person_dict = {
+            "first_name": job_row.get("first_name", ""),
+            "last_name": job_row.get("last_name", ""),
+            "title": job_row.get("title", ""),  # person's title
+        }
+        job_dict = {
+            "title": job_row.get("job_title", ""),
+            "location": job_row.get("job_location", ""),
+            "salary_min": job_row.get("salary_min"),
+            "salary_max": job_row.get("salary_max"),
+            "salary_currency": job_row.get("salary_currency"),
+            "tech_stack_json": job_row.get("tech_stack_json"),
+        }
         try:
             draft = await generate_draft_for_person(
-                job_row, email_row, job_row, profile, company,
+                person_dict, email_row, job_dict, profile, company,
                 llm_client=llm_client, dry_run=dry_run,
             )
         except LLMNotConfigured as exc:

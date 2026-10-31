@@ -21,7 +21,6 @@ from leadforge.db import connect, init_schema
 from leadforge.models import Contact, EmailCandidate
 from leadforge.scoring import evidence_tier, is_sendable, score
 from leadforge.tools.email_patterns import generate, rank_patterns
-from leadforge.tools.smtp_verify import verify_candidates_sync
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +58,7 @@ def _row_to_contact(row, domain: str, company: str) -> Contact:
     )
 
 
-def find_emails_for_person(
+async def find_emails_for_person(
     person_row,
     *,
     settings: Settings,
@@ -70,6 +69,8 @@ def find_emails_for_person(
     probe_fn=None,
 ) -> list[EmailCandidate]:
     """Generate + optionally verify + score candidate emails for one person."""
+    from leadforge.tools.smtp_verify import verify_candidates
+
     contact = _row_to_contact(person_row, domain, company)
     if not (contact.first_name or contact.last_name):
         return []
@@ -85,7 +86,7 @@ def find_emails_for_person(
 
     if smtp_enabled:
         try:
-            candidates = verify_candidates_sync(
+            candidates = await verify_candidates(
                 contact,
                 candidates,
                 settings=settings,
@@ -104,7 +105,6 @@ def find_emails_for_person(
         pm = bool(c.pattern and c.pattern in pattern_set)
         s = score(c, source_count=1, pattern_matches_domain=pm)
         tier = evidence_tier(c, pattern_matches_domain=pm)
-        # evidence_tier returns Literal["A","B","C"] (already a str)
         tier_str = tier if isinstance(tier, str) else tier.value
         scored.append(
             c.model_copy(update={"confidence": s, "evidence_tier": tier_str})
@@ -166,7 +166,7 @@ def _persist_email(
     return True
 
 
-def run_email_e2e(
+async def run_email_e2e(
     settings: Settings,
     *,
     profile_id: str = "ai_ml",
@@ -208,7 +208,7 @@ def run_email_e2e(
         for prow in company_rows:
             full_name = f"{prow['first_name']} {prow['last_name']}".strip()
             try:
-                candidates = find_emails_for_person(
+                candidates = await find_emails_for_person(
                     prow,
                     settings=settings,
                     company=company_name,

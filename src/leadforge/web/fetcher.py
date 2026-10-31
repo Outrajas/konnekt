@@ -21,7 +21,7 @@ from leadforge.web.errors import (
 )
 from leadforge.web.policy import DomainPolicy, DomainRule
 from leadforge.web.robots import RobotsChecker
-from leadforge.web.tiers import http, obscura, stealth
+from leadforge.web.tiers import browser, http, obscura
 
 log = logging.getLogger(__name__)
 
@@ -143,6 +143,16 @@ class Fetcher:
             if classification == "thin" and tier < ceiling:
                 tier += 1
                 continue
+            if (
+                classification in ("blocked", "challenge")
+                and tier < 3
+                and ceiling >= 3
+                and self.settings.browser_enabled
+                and rule.allow_browser
+            ):
+                # A real browser is allowed here: escalate instead of giving up.
+                tier = 3
+                continue
             if classification in ("blocked", "challenge", "rate_limited"):
                 await self.budget.pause(
                     self.policy.budget_key(host), self.settings.pause_hours_on_block, classification
@@ -177,8 +187,8 @@ class Fetcher:
                 stealth=self.settings.obscura_stealth,
                 timeout_seconds=self.settings.obscura_timeout_seconds,
             )
-        if tier == 3:
-            stealth.require_allowed(rule)
+        if tier >= 3:
+            return await browser.fetch(url, settings=self.settings, rule=rule)
         raise TierUnavailable(f"Unsupported fetch tier: {tier}")
 
     def _log_fetch(

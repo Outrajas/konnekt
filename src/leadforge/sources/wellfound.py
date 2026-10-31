@@ -117,6 +117,7 @@ def _job_from_apollo_entry(entry: dict, apollo: dict) -> Job | None:
     comp = entry.get("compensation") or ""
     desc = _salary_prefix(str(comp))
 
+    from leadforge.seniority import infer_seniority
     return Job(
         company=str(company_name),
         domain=domain,
@@ -127,6 +128,7 @@ def _job_from_apollo_entry(entry: dict, apollo: dict) -> Job | None:
         description=desc,
         source="wellfound",
         remote=bool(entry.get("remote", False)),
+        seniority=infer_seniority(str(title), desc),
     )
 
 
@@ -298,6 +300,7 @@ def _is_india_location(loc: str) -> bool:
 
 
 def _is_entry_level_title(title: str, mode: str = "strict") -> bool:
+    """Title-only seniority check (kept for backward compat with tests)."""
     if not title:
         return mode == "lenient"
     if _matches_hint(title, SENIORITY_EXCLUDE_HINTS):
@@ -305,6 +308,20 @@ def _is_entry_level_title(title: str, mode: str = "strict") -> bool:
     if mode == "strict":
         return _matches_hint(title, ENTRY_LEVEL_TITLE_HINTS)
     return True
+
+
+def _job_passes_seniority(job, mode: str = "strict") -> bool:
+    """Seniority check that prefers job.seniority field when present."""
+    level = getattr(job, "seniority", "unknown")
+    if level in {"intern", "entry"}:
+        return True
+    if level in {"senior", "staff", "principal", "lead", "exec"}:
+        return False
+    if level == "mid":
+        # In strict mode "mid" fails; lenient passes.
+        return mode == "lenient"
+    # "unknown" - fall back to title-only check
+    return _is_entry_level_title(job.title or "", mode)
 
 
 def filter_jobs_for_operator(
@@ -330,7 +347,7 @@ def filter_jobs_for_operator(
     out: list[Job] = []
     for job in jobs:
         loc = job.location or ""
-        is_entry = _is_entry_level_title(job.title, entry_level_mode)
+        is_entry = _job_passes_seniority(job, entry_level_mode)
         if india_always_ok and _is_india_location(loc):
             if not india_requires_entry_level or is_entry:
                 out.append(job)

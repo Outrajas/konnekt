@@ -1,6 +1,8 @@
 """Tests for email_e2e stage. All offline via injected probe_fn."""
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from leadforge import cli as cli_mod
@@ -67,10 +69,10 @@ def _fetch_person(settings, pid):
 
 def test_find_emails_generates_candidates(settings, person_augury):
     row = _fetch_person(settings, person_augury["person_id"])
-    candidates = find_emails_for_person(
+    candidates = asyncio.run(find_emails_for_person(
         row, settings=settings, company="Augury", domain="augury.com",
         smtp_enabled=False,
-    )
+    ))
     assert len(candidates) >= 2
     emails = {c.email for c in candidates}
     assert any("jane" in e for e in emails)
@@ -96,10 +98,10 @@ def test_find_emails_smtp_verified(settings, person_augury):
     async def _fake_mx(*args, **kwargs):
         return ["mx.augury.com"]
 
-    candidates = find_emails_for_person(
+    candidates = asyncio.run(find_emails_for_person(
         row, settings=settings, company="Augury", domain="augury.com",
         smtp_enabled=True, mx_resolver=_fake_mx, probe_fn=_fake_probe,
-    )
+    ))
     sends = [c for c in candidates if c.verification_verdict == VerificationVerdict.SEND]
     assert len(sends) >= 2
 
@@ -122,10 +124,12 @@ def test_find_emails_empty_name_returns_empty(settings):
     finally:
         conn.close()
     row = _fetch_person(settings, pid)
-    candidates = find_emails_for_person(
-        row, settings=settings, company="Empty", domain="empty.test", smtp_enabled=False,
-    )
+    candidates = asyncio.run(find_emails_for_person(
+        row, settings=settings, company="Empty", domain="empty.test",
+        smtp_enabled=False,
+    ))
     assert candidates == []
+
 
 
 def test_persist_email_creates(settings, person_augury):
@@ -188,12 +192,12 @@ def test_run_e2e_skips_wellfound(settings):
         conn.commit()
     finally:
         conn.close()
-    result = run_email_e2e(settings, smtp_enabled=False, dry_run=True)
+    result = asyncio.run(run_email_e2e(settings, smtp_enabled=False, dry_run=True))
     assert result.total_candidates == 0
 
 
 def test_run_e2e_dry_run_does_not_persist(settings, person_augury):
-    result = run_email_e2e(settings, smtp_enabled=False, dry_run=True)
+    result = asyncio.run(run_email_e2e(settings, smtp_enabled=False, dry_run=True))
     assert result.total_candidates >= 2
     assert result.total_persisted == 0
     conn = connect(settings.db_path)
@@ -205,7 +209,7 @@ def test_run_e2e_dry_run_does_not_persist(settings, person_augury):
 
 
 def test_run_e2e_live_persists(settings, person_augury):
-    result = run_email_e2e(settings, smtp_enabled=False, dry_run=False)
+    result = asyncio.run(run_email_e2e(settings, smtp_enabled=False, dry_run=False))
     assert result.total_candidates >= 2
     assert result.total_persisted >= 2
     conn = connect(settings.db_path)

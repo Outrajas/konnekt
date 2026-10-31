@@ -35,7 +35,7 @@ _CURRENCY_RE = {
 
 _CURRENCY_TOKENS = r"[$₹€£¥]|USD|INR|EUR|GBP|JPY|CAD|AUD|Rs\.?|rupees"
 
-_RANGE_SEP = r"(?:\s*(?:-|–|—|to)\s*)"
+_RANGE_SEP = r"(?:\s*(?:-|-|-|to)\s*)"
 _NUM = r"\d[\d,.]*[kKmM]?"
 
 _SALARY_RANGE_RE = re.compile(
@@ -46,7 +46,7 @@ _SALARY_RANGE_RE = re.compile(
 )
 
 _LPA_RANGE_RE = re.compile(
-    r"(?P<n1>\d[\d,.]*)\s*(?:-|–|to)\s*(?P<n2>\d[\d,.]*)\s*LPA",
+    r"(?P<n1>\d[\d,.]*)\s*(?:-|-|to)\s*(?P<n2>\d[\d,.]*)\s*LPA",
     re.IGNORECASE,
 )
 
