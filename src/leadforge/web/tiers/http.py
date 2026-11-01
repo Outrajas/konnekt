@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from leadforge.config import Settings
+from leadforge.web import proxy as proxy_mod
 
 MAX_RESPONSE_BYTES = 3 * 1024 * 1024
 
@@ -26,6 +27,14 @@ def tier1_backend() -> str:
     return "scrapling"
 
 
+def _proxy_for(settings: Settings) -> proxy_mod.ProxyConfig | None:
+    """Resolve the Tier-1 proxy, or None when unset/disabled."""
+    if not settings.proxy_tier1:
+        return None
+    raw = settings.proxy_url.get_secret_value() if settings.proxy_url else None
+    return proxy_mod.parse_proxy(raw)
+
+
 async def fetch(
     url: str, settings: Settings | None = None, *, use_httpx: bool = False
 ) -> RawResponse:
@@ -35,6 +44,7 @@ async def fetch(
         "Accept-Language": "en-US,en;q=0.9",
     }
     timeout = httpx.Timeout(settings.http_timeout_seconds)
+    proxy_config = _proxy_for(settings)
     fetcher_class: Any = None
     if not use_httpx:
         try:
@@ -44,6 +54,9 @@ async def fetch(
         else:
             fetcher_class = scrapling_fetcher
     if fetcher_class is not None:
+        extra: dict[str, Any] = {}
+        if proxy_config is not None:
+            extra["proxy"] = proxy_config.inline_url()
         response = await asyncio.to_thread(
             fetcher_class.get,
             url,
@@ -55,6 +68,7 @@ async def fetch(
             retries=0,
             cookies=None,
             auth=None,
+            **extra,
         )
         body = str(response.text)
         if len(body.encode("utf-8", errors="replace")) > MAX_RESPONSE_BYTES:
@@ -62,12 +76,15 @@ async def fetch(
         return RawResponse(
             str(response.url), int(response.status), dict(response.headers), body, "scrapling"
         )
-    async with httpx.AsyncClient(
-        timeout=timeout,
-        follow_redirects=True,
-        max_redirects=5,
-        headers=headers,
-    ) as client:
+    client_kwargs: dict[str, Any] = {
+        "timeout": timeout,
+        "follow_redirects": True,
+        "max_redirects": 5,
+        "headers": headers,
+    }
+    if proxy_config is not None:
+        client_kwargs["proxy"] = proxy_config.inline_url()
+    async with httpx.AsyncClient(**client_kwargs) as client:
         async with client.stream("GET", url) as response:
             chunks = bytearray()
             async for chunk in response.aiter_bytes():

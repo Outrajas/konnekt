@@ -170,3 +170,34 @@ solves challenges programmatically.
 Set `LEADFORGE_BROWSER_HEADED=false` for an unattended run, and
 `LEADFORGE_BROWSER_CHANNEL=` (empty) to use Playwright's bundled Chromium
 instead of the installed Chrome.
+
+## Proxy
+
+One setting drives every tier:
+
+```powershell
+# .env  (never commit this file)
+LEADFORGE_PROXY_URL=http://user:pass@gate.provider.net:8080
+LEADFORGE_PROXY_TIER1=true
+LEADFORGE_PROXY_TIER2=true
+LEADFORGE_PROXY_TIER3=true
+```
+
+Accepted schemes: `http`, `https`, `socks5`, `socks5h`, `socks4`. A bare
+`host:port` is treated as `http`. `leadforge doctor` prints the proxy host and
+port only - never the password.
+
+There is no silent fallback to the direct connection: if the proxy is set and
+unreachable, the fetch fails. That is intentional - a job search that quietly
+leaks your home IP defeats the point of paying for a residential proxy.
+
+```powershell
+# prove the proxy is in the path (should fail loudly)
+$env:LEADFORGE_PROXY_URL = "http://127.0.0.1:9"
+leadforge fetch https://example.com --text
+```
+
+Rotating proxies: most providers give either a rotating endpoint (one host, new
+IP per request) or a sticky session in the username (`user-session-abc123`).
+Use the sticky form when you need a logged-in LinkedIn session to keep the same
+exit IP for the whole run.

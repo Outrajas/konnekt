@@ -33,6 +33,7 @@ from __future__ import annotations
 import importlib
 import logging
 
+from leadforge.web import proxy as proxy_mod
 from leadforge.web.errors import FetchFailed, TierUnavailable
 from leadforge.web.tiers.http import MAX_RESPONSE_BYTES, RawResponse
 
@@ -129,7 +130,21 @@ class BrowserSession:
             options["channel"] = channel
         if self.settings.browser_user_agent:
             options["user_agent"] = self.settings.browser_user_agent
+        proxy_config = self._proxy()
+        if proxy_config is not None:
+            options["proxy"] = proxy_config.playwright()
         return options
+
+    def _proxy(self):
+        """Tier-3 proxy, or None. Credentials are never logged."""
+        if not getattr(self.settings, "proxy_tier3", False):
+            return None
+        raw = (
+            self.settings.proxy_url.get_secret_value()
+            if getattr(self.settings, "proxy_url", None)
+            else None
+        )
+        return proxy_mod.parse_proxy(raw)
 
     def _channel_candidates(self) -> tuple[str | None, ...]:
         configured = self.settings.browser_channel or None

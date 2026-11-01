@@ -9,6 +9,7 @@ from leadforge import clock
 from leadforge.config import Settings
 from leadforge.db import connect
 from leadforge.web import FetchResult
+from leadforge.web import proxy as proxy_module
 from leadforge.web.budget import Budget
 from leadforge.web.cache import PageCache, normalize_url
 from leadforge.web.denylist import check_host, load_denylist
@@ -183,6 +184,12 @@ class Fetcher:
                 raise FetchFailed(f"Thin response from {host}; no permitted rendering tier")
             raise FetchFailed(f"Unexpected response from {host}: {response.status}")
 
+    def _proxy_inline(self) -> str | None:
+        """Proxy URL with credentials for subprocess tiers. Never logged."""
+        raw = self.settings.proxy_url.get_secret_value() if self.settings.proxy_url else None
+        config = proxy_module.parse_proxy(raw)
+        return config.inline_url() if config else None
+
     async def _fetch_tier(
         self, tier: int, url: str, rule: DomainRule, *, force_httpx: bool = False
     ) -> http.RawResponse:
@@ -204,6 +211,7 @@ class Fetcher:
                 executable=str(self.settings.obscura_path) if self.settings.obscura_path else None,
                 stealth=self.settings.obscura_stealth,
                 timeout_seconds=self.settings.obscura_timeout_seconds,
+                proxy=self._proxy_inline() if self.settings.proxy_tier2 else None,
             )
         if tier >= 3:
             return await browser.fetch(url, settings=self.settings, rule=rule)

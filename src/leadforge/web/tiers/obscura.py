@@ -4,20 +4,34 @@ from leadforge.web.errors import FetchFailed, TierUnavailable
 from leadforge.web.tiers.http import RawResponse
 
 
-def build_argv(executable: str, url: str, timeout: int, *, stealth: bool) -> list[str]:
+def build_argv(
+    executable: str,
+    url: str,
+    timeout: int,
+    *,
+    stealth: bool,
+    proxy: str | None = None,
+) -> list[str]:
     argv = [executable, "fetch", url, "--dump", "html", "--timeout", str(timeout), "--quiet"]
     if stealth:
         argv.append("--stealth")
+    if proxy:
+        argv.extend(["--proxy", proxy])
     return argv
 
 
 async def fetch(
-    url: str, *, executable: str | None, stealth: bool, timeout_seconds: int
+    url: str,
+    *,
+    executable: str | None,
+    stealth: bool,
+    timeout_seconds: int,
+    proxy: str | None = None,
 ) -> RawResponse:
     if not executable:
         raise TierUnavailable("Tier 2 is unavailable until OBSCURA_PATH is set")
     process = await asyncio.create_subprocess_exec(
-        *build_argv(executable, url, timeout_seconds, stealth=stealth),
+        *build_argv(executable, url, timeout_seconds, stealth=stealth, proxy=proxy),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

@@ -195,6 +195,22 @@ def doctor() -> None:
     )
     if settings.browser_enabled and not browser_state["available"]:
         console.print(f"[bold yellow]Warning:[/] {browser_state['detail']}")
+    from leadforge.web.proxy import redact
+
+    raw_proxy = settings.proxy_url.get_secret_value() if settings.proxy_url else None
+    tiers_on = ",".join(
+        name
+        for name, on in (
+            ("1", settings.proxy_tier1),
+            ("2", settings.proxy_tier2),
+            ("3", settings.proxy_tier3),
+        )
+        if on
+    )
+    console.print(
+        f"[bold]Proxy:[/] {redact(raw_proxy)}"
+        + (f" (tiers {tiers_on})" if raw_proxy else " (direct)")
+    )
     console.print()
 
 

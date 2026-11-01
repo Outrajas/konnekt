@@ -75,6 +75,14 @@ class Settings(BaseSettings):
         ),
     )
 
+    proxy_url: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("PROXY_URL", "LEADFORGE_PROXY_URL"),
+    )
+    proxy_tier1: bool = True
+    proxy_tier2: bool = True
+    proxy_tier3: bool = True
+
     browser_enabled: bool = False
     browser_headed: bool = True
     browser_engine: Literal["auto", "patchright", "playwright"] = "auto"
