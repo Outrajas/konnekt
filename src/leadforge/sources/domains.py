@@ -23,6 +23,7 @@ SYNTHETIC_TLDS: tuple[str, ...] = (
     "instahyre",
     "unstop",
     "weworkremotely",
+    "wwr",
     "remotive",
     "himalayas",
     "hirist",

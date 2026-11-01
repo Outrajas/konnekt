@@ -26,7 +26,7 @@ def test_extract_from_class_based_cards():
       </div>
     </body></html>
     """
-    people = extract_people(html, "https://acme.test/team", "Acme")
+    people = extract_people(html, "https://acme-robotics.io/team", "Acme")
     assert len(people) == 2
     names = [p.name for p in people]
     assert "Jane Smith" in names
@@ -41,18 +41,18 @@ def test_extract_rejects_lowercase_names():
     html = """
     <div class="team-member"><h3>not a real name</h3></div>
     """
-    assert extract_people(html, "https://acme.test/team", "Acme") == []
+    assert extract_people(html, "https://acme-robotics.io/team", "Acme") == []
 
 
 def test_extract_rejects_single_word_names():
     html = '<div class="team-member"><h3>Madonna</h3></div>'
-    assert extract_people(html, "https://acme.test/team", "Acme") == []
+    assert extract_people(html, "https://acme-robotics.io/team", "Acme") == []
 
 
 def test_extract_rejects_role_words_as_names():
     html = '<div class="team-member"><h3>Head Engineer</h3></div>'
     # "engineer" is a role keyword, so this is rejected as a name
-    assert extract_people(html, "https://acme.test/team", "Acme") == []
+    assert extract_people(html, "https://acme-robotics.io/team", "Acme") == []
 
 
 def test_extract_structural_fallback():
@@ -65,7 +65,7 @@ def test_extract_structural_fallback():
       <p>Product Manager</p>
     </body></html>
     """
-    people = extract_people(html, "https://acme.test/team", "Acme")
+    people = extract_people(html, "https://acme-robotics.io/team", "Acme")
     names = [p.name for p in people]
     assert "Priya Sharma" in names
     assert "Adam Lee" in names
@@ -76,7 +76,7 @@ def test_extract_dedupes_name_and_title():
     <div class="team-member"><h3>Jane Smith</h3><p class="title">CEO</p></div>
     <div class="team-member"><h3>Jane Smith</h3><p class="title">CEO</p></div>
     """
-    people = extract_people(html, "https://acme.test/team", "Acme")
+    people = extract_people(html, "https://acme-robotics.io/team", "Acme")
     assert len(people) == 1
 
 
@@ -88,18 +88,18 @@ def test_extract_person_url_from_link():
       <a href="/team/jane-smith">profile</a>
     </div>
     """
-    people = extract_people(html, "https://acme.test/team", "Acme")
+    people = extract_people(html, "https://acme-robotics.io/team", "Acme")
     assert len(people) == 1
-    assert people[0].url == "https://acme.test/team/jane-smith"
+    assert people[0].url == "https://acme-robotics.io/team/jane-smith"
 
 
 def test_extract_empty_html():
-    assert extract_people("", "https://acme.test", "Acme") == []
+    assert extract_people("", "https://acme-robotics.io", "Acme") == []
 
 
 def test_extract_no_candidates():
     html = "<html><body><p>Nothing here</p></body></html>"
-    assert extract_people(html, "https://acme.test", "Acme") == []
+    assert extract_people(html, "https://acme-robotics.io", "Acme") == []
 
 
 # ---------------- person_domain_from_wellfound ----------------
@@ -153,7 +153,7 @@ def test_walk_skips_wellfound_placeholder():
 
 def test_walk_fetches_team_paths_and_extracts():
     fake = _FakeFetcher({
-        "https://acme.test/team": """
+        "https://acme-robotics.io/team": """
             <div class="team-member">
               <h3>Jane Smith</h3>
               <p class="title">Engineering Manager</p>
@@ -161,12 +161,12 @@ def test_walk_fetches_team_paths_and_extracts():
         """,
     })
     people = asyncio.run(
-        walk_company_people("Acme", "acme.test", fetcher=fake)
+        walk_company_people("Acme", "acme-robotics.io", fetcher=fake)
     )
     assert len(people) == 1
     assert people[0].name == "Jane Smith"
     assert people[0].title == "Engineering Manager"
-    assert "https://acme.test/team" in fake.calls
+    assert "https://acme-robotics.io/team" in fake.calls
 
 
 def test_walk_dedupes_across_paths():
@@ -177,11 +177,11 @@ def test_walk_dedupes_across_paths():
         </div>
     """
     fake = _FakeFetcher({
-        "https://acme.test/team": same_page,
-        "https://acme.test/about": same_page,
+        "https://acme-robotics.io/team": same_page,
+        "https://acme-robotics.io/about": same_page,
     })
     people = asyncio.run(
-        walk_company_people("Acme", "acme.test", fetcher=fake)
+        walk_company_people("Acme", "acme-robotics.io", fetcher=fake)
     )
     assert len(people) == 1
 
@@ -189,14 +189,14 @@ def test_walk_dedupes_across_paths():
 def test_walk_returns_empty_on_all_fetch_failures():
     fake = _FakeFetcher({})
     people = asyncio.run(
-        walk_company_people("Acme", "acme.test", fetcher=fake)
+        walk_company_people("Acme", "acme-robotics.io", fetcher=fake)
     )
     assert people == []
 
 
 def test_walk_limits_fetches():
     fake = _FakeFetcher({})
-    asyncio.run(walk_company_people("Acme", "acme.test", fetcher=fake, max_pages=3))
+    asyncio.run(walk_company_people("Acme", "acme-robotics.io", fetcher=fake, max_pages=3))
     assert len(fake.calls) == 3
 
 
@@ -230,7 +230,7 @@ def test_reject_drop_us_a_line():
 def test_reject_name_without_title():
     """A name alone (no title found) is not enough — likely nav."""
     html = '<div class="team-member"><h3>Jane Smith</h3></div>'
-    assert extract_people(html, "https://acme.test/team", "Acme") == []
+    assert extract_people(html, "https://acme-robotics.io/team", "Acme") == []
 
 
 def test_reject_title_without_role_keyword():
@@ -240,7 +240,7 @@ def test_reject_title_without_role_keyword():
       <p class="title">Some Random Text</p>
     </div>
     """
-    assert extract_people(html, "https://acme.test/team", "Acme") == []
+    assert extract_people(html, "https://acme-robotics.io/team", "Acme") == []
 
 
 def test_reject_paragraph_as_title():
@@ -255,7 +255,7 @@ def test_reject_paragraph_as_title():
       <p class="title">{prose}</p>
     </div>
     """
-    assert extract_people(html, "https://acme.test/team", "Acme") == []
+    assert extract_people(html, "https://acme-robotics.io/team", "Acme") == []
 
 
 def test_accept_name_with_real_title():
@@ -266,7 +266,7 @@ def test_accept_name_with_real_title():
       <p class="title">Head of Talent</p>
     </div>
     """
-    people = extract_people(html, "https://acme.test/team", "Acme")
+    people = extract_people(html, "https://acme-robotics.io/team", "Acme")
     assert len(people) == 1
     assert people[0].name == "Jane Smith"
     assert people[0].title == "Head of Talent"
@@ -279,7 +279,7 @@ def test_accept_engineering_title():
       <p class="title">Senior Software Engineer</p>
     </div>
     """
-    people = extract_people(html, "https://acme.test/team", "Acme")
+    people = extract_people(html, "https://acme-robotics.io/team", "Acme")
     assert len(people) == 1
 
 
@@ -290,5 +290,5 @@ def test_accept_recruiter_title():
       <p class="title">Technical Recruiter</p>
     </div>
     """
-    people = extract_people(html, "https://acme.test/team", "Acme")
+    people = extract_people(html, "https://acme-robotics.io/team", "Acme")
     assert len(people) == 1

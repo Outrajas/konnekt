@@ -355,7 +355,9 @@ async def walk_company_people(
     max_pages: int = 5,
 ) -> list[PersonCandidate]:
     """Fetch standard team/about paths and concatenate extracted people."""
-    if not domain or domain.endswith(".wellfound"):
+    from leadforge.sources.domains import is_synthetic_domain
+
+    if not domain or is_synthetic_domain(domain):
         return []
 
     from leadforge.config import settings
@@ -389,9 +391,9 @@ async def walk_company_people(
 
 
 def person_domain_from_wellfound(domain: str) -> str:
-    """Return '' for .wellfound placeholders, else domain unchanged."""
+    """Return '' for any board placeholder (.wellfound, .wwr, ...), else the domain."""
     if not domain:
         return ""
-    if domain.endswith(".wellfound"):
-        return ""
-    return domain
+    from leadforge.sources.domains import is_synthetic_domain
+
+    return "" if is_synthetic_domain(domain) else domain
