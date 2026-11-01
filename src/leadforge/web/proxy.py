@@ -13,10 +13,17 @@ fail *loudly at parse time* rather than silently scraping from the home IP.
 
 from __future__ import annotations
 
+import itertools
+import logging
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 SUPPORTED_SCHEMES = ("http", "https", "socks5", "socks5h", "socks4")
+
+log = logging.getLogger(__name__)
+HOSTNAME = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 class ProxyError(ValueError):
@@ -81,6 +88,8 @@ def parse_proxy(raw: str | None) -> ProxyConfig | None:
         )
     if not parts.hostname:
         raise ProxyError("Proxy URL has no host")
+    if not HOSTNAME.fullmatch(parts.hostname):
+        raise ProxyError(f"Proxy hostname is not valid: {parts.hostname!r}")
     try:
         port = parts.port
     except ValueError as exc:
@@ -99,3 +108,73 @@ def redact(raw: str | None) -> str:
     except ProxyError:
         return "(invalid proxy)"
     return config.label() if config else "(none)"
+
+class ProxyPool:
+    """Round-robin proxy list with a short memory of the ones that just failed.
+
+    Free proxies are unreliable by nature, so the pool is built to tolerate
+    that: a proxy that fails a fetch is parked for ``cooldown`` selections
+    before being tried again, and the pool never raises when empty — a fetch
+    with no healthy proxy simply runs direct (or fails, if one was configured,
+    because there is no silent fallback at the transport layer).
+    """
+
+    def __init__(self, proxies: list[ProxyConfig], *, cooldown: int = 5) -> None:
+        self.proxies = proxies
+        self.cooldown = max(1, cooldown)
+        self._cycle = itertools.cycle(range(len(proxies))) if proxies else None
+        self._parked: dict[str, int] = {}
+        self.failures: dict[str, int] = {}
+
+    @classmethod
+    def load(cls, path: Path | None, inline: str | None = None) -> ProxyPool | None:
+        """Build a pool from a file of URLs, falling back to one inline URL."""
+        entries: list[ProxyConfig] = []
+        invalid = 0
+        if path is not None and path.exists():
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                try:
+                    parsed = parse_proxy(line)
+                except ProxyError:
+                    invalid += 1
+                    continue
+                if parsed is not None:
+                    entries.append(parsed)
+            log.info("proxy pool: %d usable, %d invalid from %s", len(entries), invalid, path)
+        if not entries:
+            try:
+                single = parse_proxy(inline)
+            except ProxyError:
+                raise
+            if single is not None:
+                entries = [single]
+        return cls(entries) if entries else None
+
+    def __len__(self) -> int:
+        return len(self.proxies)
+
+    def next(self) -> ProxyConfig | None:
+        """Next healthy proxy, or None when the pool is empty/exhausted."""
+        if not self.proxies or self._cycle is None:
+            return None
+        for _ in range(len(self.proxies)):
+            index = next(self._cycle)
+            proxy = self.proxies[index]
+            if self._parked.get(proxy.server, 0) > 0:
+                self._parked[proxy.server] -= 1
+                continue
+            return proxy
+        return self.proxies[0]
+
+    def mark_bad(self, proxy: ProxyConfig | None) -> None:
+        if proxy is None:
+            return
+        self.failures[proxy.server] = self.failures.get(proxy.server, 0) + 1
+        self._parked[proxy.server] = self.cooldown
+
+    def health(self) -> list[tuple[str, int]]:
+        """(server, failure count) sorted worst-first, safe to print."""
+        return sorted(self.failures.items(), key=lambda kv: -kv[1])

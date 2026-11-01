@@ -281,7 +281,7 @@ async def test_router_retries_empty_scrapling_response_with_httpx(tmp_path, monk
     )
     calls = []
 
-    async def fake_http(url, _settings, *, use_httpx=False):
+    async def fake_http(url, _settings, *, use_httpx=False, proxy=None):
         calls.append(use_httpx)
         return RawResponse(
             url,
@@ -325,7 +325,7 @@ async def test_router_retries_empty_scrapling_robots_response_with_httpx(
     )
     calls = []
 
-    async def fake_http(url, _settings, *, use_httpx=False):
+    async def fake_http(url, _settings, *, use_httpx=False, proxy=None):
         calls.append(use_httpx)
         body = "User-agent: *\nAllow: /\n" if use_httpx else ""
         return RawResponse(url, 200, {}, body, "httpx" if use_httpx else "scrapling")

@@ -270,7 +270,7 @@ async def test_router_skips_unavailable_tier_and_climbs(monkeypatch, tmp_path) -
     async def fake_acquire(*_args, **_kwargs):
         return None
 
-    async def fake_tier(tier, url, rule, *, force_httpx=False):
+    async def fake_tier(tier, url, rule, *, force_httpx=False, proxy=None):
         tiers.append(tier)
         if tier == 2:
             raise __import__("leadforge.web.errors", fromlist=["TierUnavailable"]).TierUnavailable(

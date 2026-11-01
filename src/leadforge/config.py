@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     proxy_tier1: bool = True
     proxy_tier2: bool = True
     proxy_tier3: bool = True
+    proxy_file: Path | None = Path("data/proxies.txt")
 
     browser_enabled: bool = False
     browser_headed: bool = True
@@ -110,6 +111,22 @@ class Settings(BaseSettings):
     )
     llm_model: str | None = Field(
         default=None, validation_alias=AliasChoices("LLM_MODEL", "LEADFORGE_LLM_MODEL")
+    )
+    llm_fallback_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "LLM_FALLBACK_BASE_URL", "LEADFORGE_LLM_FALLBACK_BASE_URL"
+        ),
+    )
+    llm_fallback_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "LLM_FALLBACK_API_KEY", "LEADFORGE_LLM_FALLBACK_API_KEY"
+        ),
+    )
+    llm_fallback_model: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("LLM_FALLBACK_MODEL", "LEADFORGE_LLM_FALLBACK_MODEL"),
     )
     llm_max_input_chars: int = Field(
         default=12_000,

@@ -36,7 +36,11 @@ def _proxy_for(settings: Settings) -> proxy_mod.ProxyConfig | None:
 
 
 async def fetch(
-    url: str, settings: Settings | None = None, *, use_httpx: bool = False
+    url: str,
+    settings: Settings | None = None,
+    *,
+    use_httpx: bool = False,
+    proxy: proxy_mod.ProxyConfig | None = None,
 ) -> RawResponse:
     settings = settings or Settings()
     headers = {
@@ -44,7 +48,7 @@ async def fetch(
         "Accept-Language": "en-US,en;q=0.9",
     }
     timeout = httpx.Timeout(settings.http_timeout_seconds)
-    proxy_config = _proxy_for(settings)
+    proxy_config = proxy or _proxy_for(settings)
     fetcher_class: Any = None
     if not use_httpx:
         try:

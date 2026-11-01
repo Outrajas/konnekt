@@ -79,3 +79,7 @@ scripts/test_*.py
 # Tier-3 browser profile (contains session state; never commit)
 data/browser-profile/
 
+
+# harvested free proxies (volatile, third-party)
+data/proxies.txt
+

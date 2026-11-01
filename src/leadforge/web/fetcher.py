@@ -45,6 +45,10 @@ class Fetcher:
         )
         self.robots.cache_get = self.cache.get
         self.robots.cache_put = self.cache.put
+        inline_proxy = (
+            self.settings.proxy_url.get_secret_value() if self.settings.proxy_url else None
+        )
+        self.pool = proxy_module.ProxyPool.load(self.settings.proxy_file, inline_proxy)
 
     async def _fetch_robots(self, robots_url: str) -> http.RawResponse:
         response = await http.fetch(robots_url, self.settings)
@@ -110,8 +114,11 @@ class Fetcher:
             )
         while True:
             await self.budget.acquire(budget_host, rule)
+            proxy = self.pool.next() if self.pool is not None else None
             try:
-                response = await self._fetch_tier(tier, normalized, rule, force_httpx=force_httpx)
+                response = await self._fetch_tier(
+                    tier, normalized, rule, force_httpx=force_httpx, proxy=proxy
+                )
                 if (
                     tier == 1
                     and response.backend == "scrapling"
@@ -122,6 +129,8 @@ class Fetcher:
                     await self.budget.acquire(budget_host, rule)
                     response = await http.fetch(normalized, self.settings, use_httpx=True)
             except TierUnavailable as exc:
+                if self.pool is not None:
+                    self.pool.mark_bad(proxy)
                 # A rendering tier that is configured but unusable (no binary, no
                 # browser, process switch off) must not block a better tier above
                 # it: skip to the next one, and only fail when nothing is left.
@@ -191,7 +200,13 @@ class Fetcher:
         return config.inline_url() if config else None
 
     async def _fetch_tier(
-        self, tier: int, url: str, rule: DomainRule, *, force_httpx: bool = False
+        self,
+        tier: int,
+        url: str,
+        rule: DomainRule,
+        *,
+        force_httpx: bool = False,
+        proxy: proxy_module.ProxyConfig | None = None,
     ) -> http.RawResponse:
         if tier == 1:
             host = urlsplit(url).hostname or ""
@@ -203,15 +218,19 @@ class Fetcher:
                 "hn.algolia.com",
             }
             if host in api_hosts:
-                return await http.fetch(url, self.settings, use_httpx=True)
-            return await http.fetch(url, self.settings, use_httpx=force_httpx)
+                return await http.fetch(url, self.settings, use_httpx=True, proxy=proxy)
+            return await http.fetch(url, self.settings, use_httpx=force_httpx, proxy=proxy)
         if tier == 2:
             return await obscura.fetch(
                 url,
                 executable=str(self.settings.obscura_path) if self.settings.obscura_path else None,
                 stealth=self.settings.obscura_stealth,
                 timeout_seconds=self.settings.obscura_timeout_seconds,
-                proxy=self._proxy_inline() if self.settings.proxy_tier2 else None,
+                proxy=(
+                    proxy.inline_url()
+                    if proxy is not None and self.settings.proxy_tier2
+                    else (self._proxy_inline() if self.settings.proxy_tier2 else None)
+                ),
             )
         if tier >= 3:
             return await browser.fetch(url, settings=self.settings, rule=rule)

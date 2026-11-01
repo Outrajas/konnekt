@@ -100,6 +100,29 @@ class LLMClient:
             )
         return base.rstrip("/"), key.get_secret_value(), model
 
+    def _endpoints(self) -> list[tuple[str, str, str]]:
+        """Primary provider first, then the optional fallback provider.
+
+        Free tiers rate-limit aggressively (429) and some cap daily (403/402).
+        A second provider turns a hard stop into a slower run, which matters
+        when the whole point is not to pay for inference.
+        """
+        endpoints = [self._configuration()]
+        fallback_key = self.settings.llm_fallback_api_key
+        if (
+            self.settings.llm_fallback_base_url
+            and self.settings.llm_fallback_model
+            and fallback_key
+        ):
+            endpoints.append(
+                (
+                    self.settings.llm_fallback_base_url.rstrip("/"),
+                    fallback_key.get_secret_value(),
+                    self.settings.llm_fallback_model,
+                )
+            )
+        return endpoints
+
     async def chat_json(
         self,
         system: str,
@@ -109,7 +132,41 @@ class LLMClient:
         temperature: float = 0.0,
         prompt_version: str = "",
     ) -> T:
-        base_url, api_key, model = self._configuration()
+        endpoints = self._endpoints()
+        for index, (base_url, api_key, model) in enumerate(endpoints):
+            try:
+                return await self._chat_on(
+                    base_url,
+                    api_key,
+                    model,
+                    system,
+                    user,
+                    schema,
+                    temperature=temperature,
+                    prompt_version=prompt_version,
+                )
+            except LLMOutputError as exc:
+                if index + 1 == len(endpoints):
+                    raise
+                log.warning(
+                    "LLM endpoint %s failed (%s); trying the fallback endpoint",
+                    base_url,
+                    str(exc)[:160],
+                )
+        raise LLMOutputError("All configured LLM endpoints failed")
+
+    async def _chat_on(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        system: str,
+        user: str,
+        schema: type[T],
+        *,
+        temperature: float = 0.0,
+        prompt_version: str = "",
+    ) -> T:
         sys_prompt = (
             system
             + "\nReturn only a valid JSON object matching this JSON schema:\n"
@@ -118,8 +175,9 @@ class LLMClient:
         messages = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user}]
         start = time.monotonic()
         log.info(
-            "LLM request prompt_version=%s system_chars=%d user_chars=%d",
+            "LLM request prompt_version=%s model=%s system_chars=%d user_chars=%d",
             prompt_version or "unspecified",
+            model,
             len(sys_prompt),
             len(user),
         )
