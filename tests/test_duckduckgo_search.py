@@ -35,3 +35,14 @@ def test_parser_tolerates_class_variants_and_deduplicates() -> None:
 def test_parser_reports_unrecognised_markup() -> None:
     with pytest.raises(ValueError, match="unrecognised DuckDuckGo"):
         parse_duckduckgo_results("<html><body><p>not a result page</p></body></html>")
+
+
+def test_parser_treats_a_no_results_page_as_empty() -> None:
+    markup = "<html><body><p>No results found for that query.</p></body></html>"
+    assert parse_duckduckgo_results(markup) == []
+
+
+def test_parser_names_the_bot_check_explicitly() -> None:
+    markup = "<html><body><h1>Anomaly detected</h1><p>unusual traffic</p></body></html>"
+    with pytest.raises(ValueError, match="bot-check"):
+        parse_duckduckgo_results(markup)

@@ -82,11 +82,15 @@ def test_people_replay_runs_without_live_operator_inputs(monkeypatch) -> None:
     assert "Riley Chen" in result.output
 
 
-def test_live_walk_refuses_without_operator_inputs(monkeypatch) -> None:
+def test_live_walk_refuses_without_operator_inputs(monkeypatch, tmp_path) -> None:
     class NoNetwork:
         def __init__(self, *args, **kwargs):
             raise AssertionError("walk must gate before constructing its fetcher")
 
+    # The gate keys off the operator's real input files; `leadforge setup`
+    # creates companies.csv in a normal checkout, so isolate the paths here.
+    monkeypatch.setattr(cli.settings, "input_dir", tmp_path / "input")
+    monkeypatch.setattr(cli.settings, "data_dir", tmp_path / "data")
     monkeypatch.setattr(cli, "Fetcher", NoNetwork)
     result = CliRunner().invoke(
         cli.app,

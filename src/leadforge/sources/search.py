@@ -51,17 +51,37 @@ class SearxngProvider:
 
 
 class DuckDuckGoProvider:
-    """Logged-out Tier 1 HTML search through the policy router."""
+    """Logged-out Tier 1 HTML search through the policy router.
+
+    The ``html.duckduckgo.com`` endpoint now answers with a bot-check page for
+    most datacenter traffic, while ``lite.duckduckgo.com/lite/`` still serves
+    results. Both are tried, in that order, and both are parsed by the same
+    tolerant parser (the lite page uses ``a.result-link`` for titles).
+    """
+
+    ENDPOINTS = (
+        "https://lite.duckduckgo.com/lite/?",
+        "https://html.duckduckgo.com/html/?",
+    )
 
     def __init__(self, *, fetcher: Fetcher | None = None) -> None:
         self.fetcher = fetcher or Fetcher()
 
     async def search(self, query: str) -> list[SearchHit]:
-        url = "https://html.duckduckgo.com/html/?" + urlencode({"q": query})
-        page = await self.fetcher.fetch(
-            url, min_tier=1, max_tier=1, purpose="search", force_httpx=True
+        last_error: Exception | None = None
+        for endpoint in self.ENDPOINTS:
+            url = endpoint + urlencode({"q": query})
+            page = await self.fetcher.fetch(
+                url, min_tier=1, max_tier=1, purpose="search", force_httpx=True
+            )
+            try:
+                return parse_duckduckgo_results(page.html)
+            except ValueError as exc:
+                last_error = exc
+                continue
+        raise ValueError(
+            f"{last_error} (try SearXNG: set LEADFORGE_SEARXNG_BASE_URL)"
         )
-        return parse_duckduckgo_results(page.html)
 
 
 def parse_duckduckgo_results(markup: str) -> list[SearchHit]:
@@ -69,24 +89,40 @@ def parse_duckduckgo_results(markup: str) -> list[SearchHit]:
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(markup, "lxml")
-    results = soup.select(".result, [data-testid='result'], .web-result")
+    results = soup.select(
+        ".result, [data-testid='result'], .web-result, tr:has(a.result-link)"
+    )
     hits: list[SearchHit] = []
     seen: set[str] = set()
     for result in results:
-        title_node = result.select_one(".result__a, a[data-testid='result-title-a'], h2 a")
+        title_node = result.select_one(
+            ".result__a, a[data-testid='result-title-a'], h2 a, a.result-link"
+        )
         if title_node is None:
             continue
         title = " ".join(title_node.stripped_strings)
         url = _unwrap_duckduckgo_url(str(title_node.get("href") or ""))
         snippet_node = result.select_one(
-            ".result__snippet, [data-testid='result-snippet'], .result__extras__snippet"
+            ".result__snippet, [data-testid='result-snippet'], .result__extras__snippet,"
+            " .result-snippet, td.result-snippet"
         )
+        if snippet_node is None:
+            cells = result.select("td")
+            snippet_node = cells[1] if len(cells) > 1 else None
         snippet = " ".join(snippet_node.stripped_strings) if snippet_node else ""
         if not title or not url or url in seen:
             continue
         seen.add(url)
         hits.append(SearchHit(title=title, url=url, snippet=snippet))
     if not hits:
+        lowered = markup.lower()
+        if "no results" in lowered or "no results found" in lowered:
+            return []
+        if "anomaly" in lowered or "unusual traffic" in lowered:
+            raise ValueError(
+                "DuckDuckGo served a bot-check page (rate limited); "
+                "slow down or use SearXNG"
+            )
         raise ValueError("unrecognised DuckDuckGo results markup")
     return hits
 

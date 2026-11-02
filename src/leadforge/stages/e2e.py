@@ -101,6 +101,7 @@ async def run_full_e2e(
     max_people: int = 5,
     max_drafts: int = 5,
     dry_run: bool = False,
+    use_search: bool = False,
     llm_client=None,
     fetcher=None,
 ) -> E2EResult:
@@ -194,7 +195,7 @@ async def run_full_e2e(
             dry_run=dry_run,
             llm_client=llm_client,
             fetcher=fetcher,
-            use_search=False,  # DDG is blocked; rely on walker + agent
+            use_search=use_search,
             use_llm=llm_client is not None,
         )
         result.stages.append(E2EStageResult(

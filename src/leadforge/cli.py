@@ -214,6 +214,174 @@ def doctor() -> None:
     console.print()
 
 
+@app.command("setup")
+def setup_command(
+    force_companies: bool = typer.Option(
+        False, "--force-companies", help="Rewrite companies.csv from the starter list."
+    ),
+    check_dns: bool = typer.Option(
+        False, "--check-dns", help="Also resolve every company domain (network)."
+    ),
+) -> None:
+    """Make a fresh checkout runnable: .env, directories, starter companies, checks."""
+    from leadforge.bootstrap import run_setup
+
+    report = run_setup(settings, root=Path.cwd(), force_companies=force_companies)
+    if report.created_env:
+        console.print("[green]created[/] .env from .env.free.example")
+    if report.created_companies:
+        console.print(
+            f"[green]companies[/] {report.created_companies} starter rows in "
+            f"{report.companies_path}"
+        )
+    for note in report.notes:
+        console.print(f"  [dim]{note}[/]")
+
+    if check_dns:
+        import asyncio as _asyncio
+
+        from leadforge.stages.domains_resolve import resolve_synthetic_domains
+
+        resolved = _asyncio.run(
+            resolve_synthetic_domains(settings, limit=100, dry_run=True)
+        )
+        console.print(
+            f"[cyan]domain check:[/] {resolved.attempted} placeholders, "
+            f"{resolved.resolved} provable"
+        )
+
+    if report.missing:
+        console.print("\n[bold yellow]Still needed:[/]")
+        for item in report.missing:
+            console.print(f"  - {item}")
+        raise typer.Exit(code=1)
+    console.print("\n[green]Ready.[/] Run: leadforge run-all")
+
+
+@app.command("resolve-domains")
+def resolve_domains_command(
+    limit: int = typer.Option(25, "--limit", min=1),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Prove domains but do not rewrite the database."
+    ),
+) -> None:
+    """Turn board placeholders (acme.wwr) into proven real domains."""
+    import asyncio as _asyncio
+
+    from leadforge.stages.domains_resolve import resolve_synthetic_domains
+
+    report = _asyncio.run(
+        resolve_synthetic_domains(settings, limit=limit, dry_run=dry_run)
+    )
+    table = Table(title="Domain resolution", show_header=True)
+    table.add_column("company", style="cyan")
+    table.add_column("placeholder")
+    table.add_column("resolved")
+    table.add_column("why", overflow="fold", max_width=44)
+    for row in report.results:
+        table.add_row(
+            row.company,
+            row.placeholder,
+            f"[green]{row.domain}[/]" if row.domain else "[dim]-[/]",
+            row.reason,
+        )
+    console.print(table)
+    console.print(
+        f"[bold]{report.resolved}[/] of {report.attempted} placeholders resolved"
+        + (" (dry-run, database untouched)" if dry_run else "")
+    )
+
+
+@app.command("run-all")
+def run_all_command(
+    profile: Annotated[str, typer.Option("--profile")] = "ai_ml",
+    companies: Annotated[
+        Path | None, typer.Option("--companies", help="CSV with name,domain rows.")
+    ] = None,
+    max_companies: Annotated[int, typer.Option("--max-companies", min=1)] = 10,
+    max_people: Annotated[int, typer.Option("--max-people", min=1)] = 5,
+    max_drafts: Annotated[int, typer.Option("--max-drafts", min=1)] = 5,
+    resolve: bool = typer.Option(
+        True, "--resolve/--no-resolve", help="Prove real domains for board placeholders."
+    ),
+    search: bool = typer.Option(
+        True, "--search/--no-search", help="Use the search provider during people discovery."
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="No network, no LLM, no writes."),
+) -> None:
+    """Zero-config run: setup -> resolve domains -> discover -> people -> email -> draft."""
+    import asyncio as _asyncio
+
+    from leadforge.bootstrap import missing_inputs, run_setup
+    from leadforge.job_persist import persist_jobs
+    from leadforge.stages.discovery import discover_company_jobs, read_companies
+
+    report = run_setup(settings, root=Path.cwd())
+    if report.created_companies:
+        console.print(f"[green]seeded[/] {report.created_companies} starter companies")
+
+    missing = missing_inputs(settings)
+    for item in missing:
+        console.print(f"[yellow]missing:[/] {item}")
+
+    if resolve and not dry_run:
+        from leadforge.stages.domains_resolve import resolve_synthetic_domains
+
+        res = _asyncio.run(resolve_synthetic_domains(settings, limit=max_companies * 3))
+        if res.resolved:
+            console.print(
+                f"[cyan]domains:[/] {res.resolved}/{res.attempted} placeholders resolved"
+            )
+
+    companies_path = companies or (settings.input_dir / "companies.csv")
+    discovered = 0
+    if companies_path.exists() and not dry_run:
+        rows = read_companies(companies_path)[:max_companies]
+        op_profile = _load_profile_for_discover(profile)
+        console.print(f"[cyan]discovering[/] {len(rows)} companies from {companies_path.name}")
+        for company in rows:
+            try:
+                jobs = _asyncio.run(discover_company_jobs(company, op_profile))
+            except Exception as exc:  # noqa: BLE001 - one company must not stop the run
+                console.print(f"  {company.domain}: {type(exc).__name__}")
+                continue
+            if jobs:
+                persist_jobs(jobs, settings, profile_id=profile)
+                discovered += len(jobs)
+                console.print(f"  {company.domain}: {len(jobs)} jobs")
+        console.print(f"[cyan]discovered[/] {discovered} jobs")
+    elif dry_run:
+        console.print("[cyan]discovery[/] skipped (dry-run)")
+    else:
+        console.print(f"[yellow]no companies file at {companies_path}[/] - run 'leadforge setup'")
+
+    from leadforge.stages.e2e import run_full_e2e
+
+    result = _asyncio.run(
+        run_full_e2e(
+            settings,
+            profile_id=profile,
+            board=None,
+            max_companies=max_companies,
+            max_people=max_people,
+            max_drafts=max_drafts,
+            dry_run=dry_run,
+            use_search=search,
+        )
+    )
+    table = Table(title=f"run-all (profile={profile})", show_header=True)
+    table.add_column("stage", style="cyan")
+    table.add_column("ok", justify="center")
+    table.add_column("detail", overflow="fold", max_width=60)
+    for stage in result.stages:
+        table.add_row(stage.name, "[green]yes[/]" if stage.ok else "[red]no[/]", stage.detail)
+    console.print(table)
+    if result.review_csv:
+        console.print(f"[bold]Review CSV:[/] {result.review_csv}")
+    if not result.ok:
+        raise typer.Exit(code=1)
+
+
 def _show_platform_budgets() -> None:
     try:
         conn = connect(settings.db_path)
