@@ -34,8 +34,13 @@ def test_obscura_path_uses_operator_named_environment_variable(monkeypatch) -> N
 
 def test_unprefixed_and_prefixed_aliases_are_accepted_without_printing_values(monkeypatch) -> None:
     monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.delenv("LEADFORGE_SMTP_MAIL_FROM", raising=False)
     _SETTING_ENV_NAMES.pop("llm_model", None)
     _SETTING_ENV_NAMES_PRESENT.pop("llm_api_key", None)
+    # The name cache is process-global and a real .env may have populated it
+    # before this test runs; clear the field we assert on.
+    _SETTING_ENV_NAMES.pop("smtp_mail_from", None)
+    _SETTING_ENV_NAMES_PRESENT.pop("smtp_mail_from", None)
     monkeypatch.setenv("LLM_API_KEY", "do-not-print-this")
     monkeypatch.setenv("LEADFORGE_LLM_API_KEY", "also-do-not-print-this")
     monkeypatch.setenv("LEADFORGE_LLM_MODEL", "test-model")

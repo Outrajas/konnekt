@@ -201,3 +201,36 @@ Rotating proxies: most providers give either a rotating endpoint (one host, new
 IP per request) or a sticky session in the username (`user-session-abc123`).
 Use the sticky form when you need a logged-in LinkedIn session to keep the same
 exit IP for the whole run.
+
+## Email identity (a domain you own)
+
+`leadforge domain-check` answers whether the domain can actually carry mail:
+
+```powershell
+leadforge domain-check                      # uses LEADFORGE_SMTP_MAIL_FROM
+leadforge domain-check --domain outrajas.tech
+```
+
+It reports MX (can receive), SPF (can send), DMARC and DKIM, and prints the exact
+records to add. At the registrar (name.com), the minimum set is:
+
+| Type | Host | Value |
+|---|---|---|
+| MX | `@` | your mail provider (Cloudflare Email Routing or ImprovMX are free) |
+| TXT | `@` | `v=spf1 include:<provider> ~all` |
+| TXT | `_dmarc` | `v=DMARC1; p=none; rua=mailto:you@yourdomain` |
+
+Start DMARC at `p=none`. Raise to `p=quarantine` only after a month of clean
+reports, or you will silently lose your own mail.
+
+With a real identity configured, verification runs in `domain` mode:
+
+```ini
+LEADFORGE_SMTP_VERIFY_MODE=domain
+LEADFORGE_SMTP_MAIL_FROM=verify@outrajas.tech
+LEADFORGE_OPERATOR_NAME=Ojas
+LEADFORGE_OPERATOR_EMAIL=ojas@outrajas.tech
+```
+
+`OPERATOR_*` is what appears as the sign-off in every generated draft, so the
+manual send is consistent. The drafts never send themselves.

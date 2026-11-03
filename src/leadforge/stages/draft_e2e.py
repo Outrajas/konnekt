@@ -248,12 +248,30 @@ async def generate_draft_for_person(
     job = dict(job_row) if not isinstance(job_row, dict) else job_row
 
     if dry_run:
-        return _template_draft(person, job, company, profile)
+        return _with_signature(_template_draft(person, job, company, profile))
 
     facts = _build_evidence_facts(person, job, email_row)
     user = _build_user_prompt(person, job, company, profile, facts)
     result = await _call_llm(_SYSTEM_PROMPT, user, llm_client=llm_client)
-    return result
+    return _with_signature(result)
+
+
+_PLACEHOLDER_LINE = re.compile(
+    r"(?im)^\s*\[(your name|name|company|role|position|email|phone)\]\s*$\n?"
+)
+
+
+def _with_signature(draft: DraftResponse) -> DraftResponse:
+    """Strip model placeholders, then append the operator's sign-off."""
+    from leadforge.config import settings as _settings
+    from leadforge.email_identity import signature
+
+    body = _PLACEHOLDER_LINE.sub("", draft.body)
+    body = re.sub(r"\n{3,}", "\n\n", body).rstrip()
+    sign = signature(_settings)
+    if not sign:
+        return draft.model_copy(update={"body": body})
+    return draft.model_copy(update={"body": body + sign})
 
 
 # ---------------- persistence ----------------

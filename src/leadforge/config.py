@@ -33,6 +33,14 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("SMTP_MAIL_FROM", "LEADFORGE_SMTP_MAIL_FROM"),
     )
     smtp_verify_mode: Literal["off", "null_sender", "domain"] = "off"
+    operator_name: str = Field(
+        default="",
+        validation_alias=AliasChoices("OPERATOR_NAME", "LEADFORGE_OPERATOR_NAME"),
+    )
+    operator_email: str = Field(
+        default="",
+        validation_alias=AliasChoices("OPERATOR_EMAIL", "LEADFORGE_OPERATOR_EMAIL"),
+    )
     smtp_timeout: float = 10.0
     smtp_timeout_seconds: float = 10.0
     smtp_max_concurrent: int = 5

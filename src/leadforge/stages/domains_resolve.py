@@ -93,23 +93,101 @@ class ResolveReport:
         return {r.placeholder: r.domain for r in self.results if r.domain}
 
 
+PARKING_MX_HINTS = (
+    "above.com",
+    "sedoparking",
+    "parkingcrew",
+    "bodis",
+    "dan.com",
+    "afternic",
+    "hugedomains",
+    "domainmarket",
+    "parklogic",
+)
+PARKING_TEXT_HINTS = (
+    "domain is for sale",
+    "buy this domain",
+    "this domain is parked",
+    "parked domain",
+    "hugedomains",
+    "afternic",
+)
+
+
+def is_parked(domain: str) -> bool:
+    """True when the domain's MX or homepage says it is a parking page.
+
+    A parked domain answers 250 to every RCPT TO, so treating it as real
+    produces twelve confident addresses that all bounce. Granica is the case
+    that taught this: granica.com resolves, mentions the name, and is parked on
+    above.com.
+    """
+    resolver = dns.resolver.Resolver()
+    resolver.lifetime = 4
+    try:
+        mx_records = resolver.resolve(domain, "MX")
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers,
+            dns.exception.DNSException):
+        return False
+    for record in mx_records:
+        exchange = str(record.exchange).lower()
+        if any(hint in exchange for hint in PARKING_MX_HINTS):
+            return True
+    return False
+
+
+def _looks_parked(html: str) -> bool:
+    lowered = html[:6000].lower()
+    return any(hint in lowered for hint in PARKING_TEXT_HINTS)
+
+
 async def resolve_company(name: str, *, fetcher) -> tuple[str, str]:
-    """Return (domain, reason); domain is '' when nothing was proven."""
-    from leadforge.web.errors import FetchError
+    """Return (domain, reason); domain is '' when nothing was proven.
+
+    A candidate is only accepted when the homepage names the company *and* the
+    domain is not a parking page. Candidates are tried in order and a mismatch
+    moves on to the next one instead of giving up on the whole company.
+    """
+    from leadforge.sources.careers import is_js_shell
+    from leadforge.web.errors import FetchError, FetchFailed
+
+    settings = getattr(fetcher, "settings", None)
+    browser_ready = bool(getattr(settings, "browser_enabled", False))
+    notes: list[str] = []
 
     for candidate in slug_candidates(name)[:12]:
         if not resolves(candidate):
             continue
+        if is_parked(candidate):
+            notes.append(f"{candidate} is parked")
+            continue
+        url = f"https://{candidate}/"
         try:
-            page = await fetcher.fetch(f"https://{candidate}/", min_tier=1, max_tier=1,
-                                       purpose="resolve")
+            page = await fetcher.fetch(url, min_tier=1, max_tier=3, purpose="resolve")
         except FetchError as exc:
-            return "", f"{candidate} resolved but fetch failed: {exc}"
+            notes.append(f"{candidate}: fetch failed ({exc})")
+            continue
         except Exception as exc:  # noqa: BLE001 - a bad candidate is not fatal
-            return "", f"{candidate} resolved but fetch errored: {type(exc).__name__}"
+            notes.append(f"{candidate}: {type(exc).__name__}")
+            continue
+        if _looks_parked(page.html):
+            notes.append(f"{candidate} serves a parking page")
+            continue
         if page_mentions(page.html, name):
             return candidate, "homepage mentions the company"
-        return "", f"{candidate} resolves but the homepage does not name the company"
+        if browser_ready and (is_js_shell(page.html) or len(page.html.strip()) < 2000):
+            try:
+                rendered = await fetcher.fetch(
+                    url, min_tier=3, max_tier=3, purpose="resolve", use_cache=False
+                )
+            except (FetchFailed, Exception):  # noqa: BLE001 - rendering is best-effort
+                rendered = None
+            if rendered is not None and page_mentions(rendered.html, name):
+                return candidate, "rendered homepage mentions the company"
+        notes.append(f"{candidate} does not name the company")
+
+    if notes:
+        return "", "; ".join(notes[:3])
     return "", "no candidate domain resolved"
 
 

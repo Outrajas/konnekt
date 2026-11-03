@@ -382,6 +382,54 @@ def run_all_command(
         raise typer.Exit(code=1)
 
 
+@app.command("domain-check")
+def domain_check_command(
+    domain: Annotated[
+        str, typer.Option("--domain", help="Domain to check; defaults to the SMTP identity.")
+    ] = "",
+) -> None:
+    """Is the sending domain ready for real outreach? MX, SPF, DMARC, DKIM."""
+    from leadforge.email_identity import check_domain, sending_address
+
+    target = domain.strip()
+    if not target:
+        address = sending_address(settings)
+        target = address.split("@")[-1] if "@" in address else ""
+    if not target:
+        console.print(
+            "[red]no domain[/] - set LEADFORGE_SMTP_MAIL_FROM or "
+            "LEADFORGE_OPERATOR_EMAIL, or pass --domain"
+        )
+        raise typer.Exit(code=2)
+
+    result = check_domain(target)
+    table = Table(title=f"Email identity: {target}", show_header=True)
+    table.add_column("record", style="cyan")
+    table.add_column("found")
+    table.add_column("value", overflow="fold", max_width=58)
+    table.add_row("MX (receive)", "[green]yes[/]" if result["mx"] else "[red]no[/]",
+                  "; ".join(result["mx"][:2]) or "-")
+    table.add_row("SPF (send)", "[green]yes[/]" if result["spf"] else "[red]no[/]",
+                  "; ".join(result["spf"][:1]) or "-")
+    table.add_row("DMARC", "[green]yes[/]" if result["dmarc"] else "[red]no[/]",
+                  "; ".join(result["dmarc"][:1]) or "-")
+    table.add_row("DKIM (default)", "[green]yes[/]" if result["dkim_default"] else "[yellow]no[/]",
+                  "selector default._domainkey")
+    table.add_row("A", "yes" if result["a"] else "no", ", ".join(result["a"][:2]) or "-")
+    console.print(table)
+
+    if result["guidance"]:
+        console.print("[bold]To fix:[/]")
+        for tip in result["guidance"]:
+            console.print(f"  - {tip}")
+    else:
+        console.print("[green]All required records present.[/]")
+    console.print(
+        f"\n[bold]Verification mode:[/] {settings.smtp_verify_mode}   "
+        f"[bold]MAIL FROM:[/] {settings.smtp_mail_from or '(unset)'}"
+    )
+
+
 def _show_platform_budgets() -> None:
     try:
         conn = connect(settings.db_path)
