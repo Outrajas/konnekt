@@ -156,6 +156,11 @@ def _migration_add_job_intel_columns(conn: sqlite3.Connection) -> None:
         "salary_currency": "TEXT",
         "salary_period": "TEXT",
         "salary_source": "TEXT",
+        "salary_raw": "TEXT",
+        "salary_evidence_url": "TEXT",
+        "salary_retrieved_at": "TEXT",
+        "salary_extraction_method": "TEXT",
+        "salary_search_status": "TEXT",
         "tech_stack_json": "TEXT",
         "reputation_score": "REAL",
         "reputation_signals_json": "TEXT",
@@ -230,6 +235,73 @@ def _migration_add_llm_classified_at(conn: sqlite3.Connection) -> None:
 
 
 MIGRATIONS.append(_migration_add_llm_classified_at)
+
+
+def _migration_add_research_trajectory(conn: sqlite3.Connection) -> None:
+    """Persist bounded search/research runs without storing secrets."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS research_run (
+            id TEXT PRIMARY KEY,
+            company_id INTEGER REFERENCES company(id),
+            profile_id TEXT,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            stop_reason TEXT,
+            queries_used INTEGER NOT NULL DEFAULT 0,
+            hits_seen INTEGER NOT NULL DEFAULT 0,
+            pages_fetched INTEGER NOT NULL DEFAULT 0,
+            llm_tokens INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS research_event (
+            id INTEGER PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES research_run(id),
+            sequence INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            provider TEXT,
+            query TEXT,
+            url TEXT,
+            parent_url TEXT,
+            rank INTEGER,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(run_id, sequence)
+        );
+        CREATE INDEX IF NOT EXISTS research_event_run_idx
+            ON research_event(run_id, sequence);
+        """
+    )
+    conn.commit()
+
+
+MIGRATIONS.append(_migration_add_research_trajectory)
+
+
+def _migration_add_research_edges(conn: sqlite3.Connection) -> None:
+    """Persist explicit website/person/contact edges for explainable research."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS research_edge (
+            id INTEGER PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES research_run(id),
+            from_kind TEXT NOT NULL,
+            from_value TEXT NOT NULL,
+            to_kind TEXT NOT NULL,
+            to_value TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            query TEXT,
+            url TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS research_edge_run_idx
+            ON research_edge(run_id, id);
+        """
+    )
+    conn.commit()
+
+
+MIGRATIONS.append(_migration_add_research_edges)
 
 
 def connect(path: str | Path) -> sqlite3.Connection:

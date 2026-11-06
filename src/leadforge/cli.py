@@ -81,7 +81,13 @@ def version() -> None:
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    require_browser: bool = typer.Option(
+        False,
+        "--require-browser",
+        help="Fail unless a configured browser engine is importable.",
+    ),
+) -> None:
     """Check Python, dependencies, and local configuration."""
     console.print(f"[bold]Python:[/] {sys.version.split()[0]}")
     console.print("[bold]Environments:[/] operator uses .\\.venv; agent uses .\\.venv-agent")
@@ -195,6 +201,12 @@ def doctor() -> None:
     )
     if settings.browser_enabled and not browser_state["available"]:
         console.print(f"[bold yellow]Warning:[/] {browser_state['detail']}")
+    if require_browser and not browser_state["available"]:
+        console.print(
+            "[bold red]Browser unavailable:[/] install Playwright or Patchright "
+            "and its browser runtime before starting a headed run."
+        )
+        raise typer.Exit(code=2)
     from leadforge.web.proxy import redact
 
     raw_proxy = settings.proxy_url.get_secret_value() if settings.proxy_url else None
@@ -307,7 +319,17 @@ def run_all_command(
     search: bool = typer.Option(
         True, "--search/--no-search", help="Use the search provider during people discovery."
     ),
+    research: bool = typer.Option(
+        True,
+        "--research/--no-research",
+        help="Run bounded multi-query research before people discovery.",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="No network, no LLM, no writes."),
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help="Stream stages, searches, pages, clues, and final counts as they happen.",
+    ),
 ) -> None:
     """Zero-config run: setup -> resolve domains -> discover -> people -> email -> draft."""
     import asyncio as _asyncio
@@ -349,6 +371,18 @@ def run_all_command(
                 persist_jobs(jobs, settings, profile_id=profile)
                 discovered += len(jobs)
                 console.print(f"  {company.domain}: {len(jobs)} jobs")
+                if live:
+                    for job in jobs:
+                        from leadforge.job_intel import extract_salary
+
+                        salary = extract_salary(job.description or "")
+                        console.print(
+                            f"    [green]job[/] {job.title} | "
+                            f"{job.location or 'location unknown'} | "
+                            f"{job.employment_type or 'type unknown'} | "
+                            f"pay={salary.raw if salary else 'not published'} | "
+                            f"{job.source} | {job.url}"
+                        )
         console.print(f"[cyan]discovered[/] {discovered} jobs")
     elif dry_run:
         console.print("[cyan]discovery[/] skipped (dry-run)")
@@ -356,6 +390,58 @@ def run_all_command(
         console.print(f"[yellow]no companies file at {companies_path}[/] - run 'leadforge setup'")
 
     from leadforge.stages.e2e import run_full_e2e
+
+    def live_progress(kind: str, payload: dict[str, object]) -> None:
+        if kind == "stage_start":
+            console.print(f"\n[bold cyan]>> {payload.get('message', '')}[/]")
+        elif kind == "stage_end":
+            console.print(f"[green]OK[/] {payload.get('message', '')}")
+        elif kind == "research_start":
+            console.print(
+                f"[bold]research[/] {payload.get('company', '')} "
+                f"({payload.get('domain', '')}) run={payload.get('run_id', '')}"
+            )
+        elif kind == "query":
+            console.print(
+                f"[cyan]query {payload.get('number')}/{payload.get('budget')}[/] "
+                f"{payload.get('query')}"
+            )
+        elif kind == "search_hit":
+            console.print(
+                f"  [dim]hit {payload.get('number')}/{payload.get('budget')}[/] "
+                f"{payload.get('title', '')} -> {payload.get('url', '')}"
+            )
+        elif kind == "fetch":
+            console.print(
+                f"  [yellow]fetch {payload.get('number')}/{payload.get('budget')}[/] "
+                f"{payload.get('url', '')}"
+            )
+        elif kind == "person_clue":
+            console.print(
+                f"  [magenta]person clue[/] {payload.get('name', '')} "
+                f"({payload.get('title', '')})"
+            )
+        elif kind == "email_clue":
+            console.print(
+                f"  [magenta]contact clue[/] {payload.get('email', '')} "
+                f"for {payload.get('person', '')}"
+            )
+        elif kind == "salary_clue":
+            console.print(
+                f"  [green]pay clue[/] {payload.get('raw', '')} "
+                f"({payload.get('currency', '')}/{payload.get('period', '')})"
+            )
+        elif kind == "job_enriched":
+            salary = payload.get("salary") or "salary not found"
+            console.print(
+                f"  [green]job intelligence[/] job={payload.get('job_id')} "
+                f"pay={salary} techs={payload.get('tech_count', 0)}"
+            )
+        elif kind == "research_stop":
+            console.print(
+                f"[green]research stop[/] reason={payload.get('reason', '')} "
+                f"people={payload.get('people', 0)} emails={payload.get('emails', 0)}"
+            )
 
     result = _asyncio.run(
         run_full_e2e(
@@ -367,6 +453,8 @@ def run_all_command(
             max_drafts=max_drafts,
             dry_run=dry_run,
             use_search=search,
+            use_research=research,
+            progress=live_progress if live else None,
         )
     )
     table = Table(title=f"run-all (profile={profile})", show_header=True)
@@ -1395,6 +1483,106 @@ def people_e2e_command(
         f"{result.total_persisted} new rows persisted across "
         f"{len(result.companies)} companies"
     )
+
+
+@app.command("research")
+def research_command(
+    company: Annotated[str, typer.Option("--company", help="Company name to research.")],
+    domain: Annotated[str, typer.Option("--domain", help="Verified company domain.")],
+    role: Annotated[str, typer.Option("--role", help="Role/title to use in searches.")] = "",
+    profile: Annotated[
+        str, typer.Option("--profile", help="Profile track to attach to discovered people.")
+    ] = "ai_ml",
+    max_queries: Annotated[int, typer.Option("--max-queries", min=1)] = 8,
+    max_hits: Annotated[int, typer.Option("--max-hits", min=1)] = 60,
+    max_fetches: Annotated[int, typer.Option("--max-fetches", min=1)] = 16,
+    max_llm_tokens: Annotated[int, typer.Option("--max-llm-tokens", min=1)] = 20_000,
+    wall_clock_seconds: Annotated[
+        int, typer.Option("--wall-clock-seconds", min=1)
+    ] = 300,
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Research and record no people/email rows."
+    ),
+) -> None:
+    """Search, follow public clues, and persist the full research trajectory."""
+    import asyncio as _asyncio
+
+    from leadforge.sources.domains import is_synthetic_domain
+    from leadforge.stages.research import ResearchBudget, research_company
+
+    if is_synthetic_domain(domain):
+        console.print(f"[red]Research refused:[/] {domain} is not a proven real domain")
+        raise typer.Exit(code=2)
+
+    result = _asyncio.run(
+        research_company(
+            settings,
+            company,
+            domain,
+            role=role,
+            profile_id=profile,
+            budget=ResearchBudget(
+                max_queries=max_queries,
+                max_hits=max_hits,
+                max_fetches=max_fetches,
+                max_llm_tokens=max_llm_tokens,
+                wall_clock_seconds=wall_clock_seconds,
+            ),
+            dry_run=dry_run,
+        )
+    )
+    console.print(
+        f"[bold]Research run:[/] {result.run_id}\n"
+        f"  company={result.company} role={role or '(any target role)'}\n"
+        f"  jobs/role context is retained in the existing job table\n"
+        f"  queries={result.queries_used} hits={result.hits_seen} "
+        f"pages={result.pages_fetched} llm_tokens={result.llm_tokens}\n"
+        f"  people={len(result.people)} emails={len(result.emails)} "
+        f"stop={result.stop_reason}\n"
+        "  no email was sent"
+    )
+
+
+@app.command("research-all")
+def research_all_command(
+    profile: Annotated[
+        str, typer.Option("--profile", help="Profile track to attach to discovered people.")
+    ] = "ai_ml",
+    max_companies: Annotated[int | None, typer.Option("--max-companies", min=1)] = 10,
+    max_queries: Annotated[int, typer.Option("--max-queries", min=1)] = 8,
+    max_hits: Annotated[int, typer.Option("--max-hits", min=1)] = 60,
+    max_fetches: Annotated[int, typer.Option("--max-fetches", min=1)] = 16,
+    max_llm_tokens: Annotated[int, typer.Option("--max-llm-tokens", min=1)] = 20_000,
+    wall_clock_seconds: Annotated[int, typer.Option("--wall-clock-seconds", min=1)] = 300,
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    """Research every real-domain company represented by discovered jobs."""
+    import asyncio as _asyncio
+
+    from leadforge.stages.research import ResearchBudget, run_research
+
+    results = _asyncio.run(
+        run_research(
+            settings,
+            profile_id=profile,
+            max_companies=max_companies,
+            budget=ResearchBudget(
+                max_queries=max_queries,
+                max_hits=max_hits,
+                max_fetches=max_fetches,
+                max_llm_tokens=max_llm_tokens,
+                wall_clock_seconds=wall_clock_seconds,
+            ),
+            dry_run=dry_run,
+        )
+    )
+    for result in results:
+        console.print(
+            f"{result.company}: jobs={len(result.jobs)} people={len(result.people)} "
+            f"emails={len(result.emails)} queries={result.queries_used} "
+            f"stop={result.stop_reason} run={result.run_id}"
+        )
+    console.print(f"[bold]Completed:[/] {len(results)} company research runs; no email was sent")
 
 
 @app.command("email-e2e")

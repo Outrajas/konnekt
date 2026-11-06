@@ -70,10 +70,13 @@ def enrich_job_row(job_id: int, settings: Settings) -> EnrichResult | None:
 
         now = clock.utcnow_iso()
         salary_source = "regex" if salary else "none"
+        salary_raw = salary.raw if salary else ""
         conn.execute(
             "UPDATE job SET "
             "salary_min=?, salary_max=?, salary_currency=?, salary_period=?, "
-            "salary_source=?, tech_stack_json=?, enriched_at=? "
+            "salary_source=?, salary_raw=?, salary_retrieved_at=?, "
+            "salary_extraction_method=?, salary_search_status=?, "
+            "tech_stack_json=?, enriched_at=? "
             "WHERE id=?",
             (
                 salary.min_amount if salary else None,
@@ -81,6 +84,10 @@ def enrich_job_row(job_id: int, settings: Settings) -> EnrichResult | None:
                 salary.currency if salary else None,
                 salary.period if salary else None,
                 salary_source,
+                salary_raw,
+                now,
+                "regex" if salary else "not_found",
+                "searched_existing_job_text",
                 json.dumps(tech),
                 now,
                 job_id,

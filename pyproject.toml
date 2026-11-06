@@ -30,6 +30,7 @@ dev = [
     "mypy>=1.10",
 ]
 fast = ["scrapling[fetchers]>=0.4"]
+browser = ["playwright>=1.45"]
 
 [project.scripts]
 leadforge = "leadforge.cli:app"

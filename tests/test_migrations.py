@@ -32,6 +32,8 @@ def test_fresh_db_has_job_intel_columns(temp_db):
         for required in (
             "description", "salary_min", "salary_max", "salary_currency",
             "salary_period", "salary_source", "tech_stack_json",
+            "salary_raw", "salary_evidence_url", "salary_retrieved_at",
+            "salary_extraction_method", "salary_search_status",
             "reputation_score", "reputation_signals_json", "enriched_at",
         ):
             assert required in cols, f"missing column {required}"

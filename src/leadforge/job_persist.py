@@ -67,8 +67,9 @@ def persist_jobs(
                 cur = conn.execute(
                     "INSERT INTO job("
                     "company_id, title, url, location, employment_type, source, "
-                    "match_score, first_seen, last_seen, profile_id, description, seniority"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "match_score, first_seen, last_seen, profile_id, description, seniority, "
+                    "salary_search_status"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         company_id,
                         job.title,
@@ -82,6 +83,7 @@ def persist_jobs(
                         profile_id,
                         job.description or "",
                         getattr(job, "seniority", "unknown"),
+                        "not_searched",
                     ),
                 )
                 url_to_id[job.url] = cast(int, cur.lastrowid)

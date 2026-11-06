@@ -87,10 +87,17 @@ async def find_emails_for_person(
 
     if smtp_enabled:
         try:
+            verify_settings = settings
+            if settings.smtp_verify_mode == "off":
+                # The command-level --smtp flag is an explicit opt-in. Use
+                # null-sender probes when no domain MAIL FROM is configured.
+                verify_settings = settings.model_copy(
+                    update={"smtp_verify_mode": "null_sender"}
+                )
             candidates = await verify_candidates(
                 contact,
                 candidates,
-                settings=settings,
+                settings=verify_settings,
                 mx_resolver=mx_resolver,
                 probe_fn=probe_fn,
             )

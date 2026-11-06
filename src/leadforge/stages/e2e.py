@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -102,13 +103,20 @@ async def run_full_e2e(
     max_drafts: int = 5,
     dry_run: bool = False,
     use_search: bool = False,
+    use_research: bool = True,
     llm_client=None,
     fetcher=None,
+    progress: Callable[[str, dict[str, object]], None] | None = None,
 ) -> E2EResult:
     """Chain: discover (if board) -> job-intel -> people -> email -> draft -> review.csv."""
     result = E2EResult()
 
+    def announce(stage: str, message: str) -> None:
+        if progress:
+            progress(stage, {"message": message})
+
     # ─── Stage A: discovery (optional - depends on --board) ──────────────
+    announce("stage_start", "discover")
     if board:
         try:
             from leadforge.sources.wellfound import fetch_wellfound_jobs
@@ -140,8 +148,10 @@ async def run_full_e2e(
         result.stages.append(E2EStageResult(
             name="discovery", ok=True, detail="skipped (no board)",
         ))
+    announce("stage_end", result.stages[-1].detail)
 
     # ─── Stage B: job intel (enrich new jobs) ───────────────────────────
+    announce("stage_start", "job_intel")
     if dry_run:
         result.stages.append(E2EStageResult(
             name="job_intel", ok=True, detail="dry-run skipped",
@@ -163,7 +173,18 @@ async def run_full_e2e(
                 ).fetchall()
                 domains = set()
                 for jr in job_rows:
-                    enrich_job_row(int(jr["id"]), settings)
+                    enriched = enrich_job_row(int(jr["id"]), settings)
+                    if progress and enriched is not None:
+                        progress(
+                            "job_enriched",
+                            {
+                                "job_id": int(jr["id"]),
+                                "salary": enriched.salary.raw if enriched.salary else "",
+                                "currency": enriched.salary.currency if enriched.salary else "",
+                                "period": enriched.salary.period if enriched.salary else "",
+                                "tech_count": len(enriched.tech_stack),
+                            },
+                        )
                     if jr["domain"]:
                         domains.add(jr["domain"])
             finally:
@@ -184,8 +205,50 @@ async def run_full_e2e(
             result.stages.append(E2EStageResult(
                 name="job_intel", ok=False, detail=f"{type(exc).__name__}: {exc}",
             ))
+    announce("stage_end", result.stages[-1].detail)
 
     # ─── Stage C: people ────────────────────────────────────────────────
+    announce("stage_start", "research")
+    if use_research:
+        try:
+            from leadforge.stages.research import ResearchBudget, run_research
+
+            research_results = await run_research(
+                settings,
+                profile_id=profile_id,
+                max_companies=max_companies,
+                budget=ResearchBudget(
+                    max_queries=4,
+                    max_hits=30,
+                    max_fetches=8,
+                    max_llm_tokens=10_000,
+                    wall_clock_seconds=180,
+                ),
+                dry_run=dry_run,
+                progress=progress,
+            )
+            result.stages.append(E2EStageResult(
+                name="research",
+                ok=True,
+                detail=(
+                    f"{sum(len(item.people) for item in research_results)} people, "
+                    f"{sum(len(item.emails) for item in research_results)} emails "
+                    f"across {len(research_results)} companies"
+                ),
+                metrics={"companies": len(research_results)},
+            ))
+        except Exception as exc:  # noqa: BLE001
+            result.stages.append(E2EStageResult(
+                name="research", ok=False, detail=f"{type(exc).__name__}: {exc}",
+            ))
+    else:
+        result.stages.append(E2EStageResult(
+            name="research", ok=True, detail="skipped by configuration",
+        ))
+    announce("stage_end", result.stages[-1].detail)
+
+    # ─── Stage D: people ────────────────────────────────────────────────
+    announce("stage_start", "people")
     try:
         from leadforge.stages.people_e2e import run_people_e2e
         p_result = await run_people_e2e(
@@ -207,8 +270,10 @@ async def run_full_e2e(
         result.stages.append(E2EStageResult(
             name="people", ok=False, detail=f"{type(exc).__name__}: {exc}",
         ))
+    announce("stage_end", result.stages[-1].detail)
 
-    # ─── Stage D: email ─────────────────────────────────────────────────
+    # ─── Stage E: email ─────────────────────────────────────────────────
+    announce("stage_start", "email")
     try:
         from leadforge.stages.email_e2e import run_email_e2e
         e_result = await run_email_e2e(
@@ -232,8 +297,10 @@ async def run_full_e2e(
         result.stages.append(E2EStageResult(
             name="email", ok=False, detail=f"{type(exc).__name__}: {exc}",
         ))
+    announce("stage_end", result.stages[-1].detail)
 
-    # ─── Stage E: draft ─────────────────────────────────────────────────
+    # ─── Stage F: draft ─────────────────────────────────────────────────
+    announce("stage_start", "draft")
     try:
         from leadforge.stages.draft_e2e import run_draft_e2e
         d_result = await run_draft_e2e(
@@ -262,9 +329,11 @@ async def run_full_e2e(
         result.stages.append(E2EStageResult(
             name="draft", ok=False, detail=f"{type(exc).__name__}: {exc}",
         ))
+    announce("stage_end", result.stages[-1].detail)
 
-    # ─── Stage F: review CSV ────────────────────────────────────────────
+    # ─── Stage G: review CSV ────────────────────────────────────────────
     if not dry_run:
+        announce("stage_start", "review")
         try:
             path, n = _make_review_csv(settings, profile_id)
             result.review_csv = path
@@ -273,6 +342,7 @@ async def run_full_e2e(
                 detail=f"{n} rows -> {Path(path).name}",
                 metrics={"review_rows": n},
             ))
+            announce("stage_end", result.stages[-1].detail)
         except Exception as exc:  # noqa: BLE001
             result.stages.append(E2EStageResult(
                 name="review", ok=False, detail=f"{type(exc).__name__}: {exc}",
