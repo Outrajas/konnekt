@@ -84,12 +84,12 @@ def _emails(text: str) -> list[str]:
 def _queries(company: str, role: str, domain: str) -> list[str]:
     role_part = role or "hiring manager recruiter talent acquisition"
     return [
+        f'site:linkedin.com/in "{company}" "{role_part}"',
+        f'site:glassdoor.com "{company}" "{role_part}"',
         f'"{company}" "{role_part}" contact',
         f'"{company}" "{role_part}" (recruiter OR "talent acquisition" OR founder)',
         f'"{company}" "{role_part}" email',
         f'"{company}" "{role_part}" (salary OR compensation OR pay)',
-        f'site:linkedin.com/in "{company}" "{role_part}"',
-        f'site:glassdoor.com "{company}" "{role_part}"',
         f'site:{domain} (team OR people OR leadership OR contact) "{role_part}"',
     ]
 

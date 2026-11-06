@@ -41,10 +41,10 @@ VerifyFn = Callable[[list[EmailCandidate]], Awaitable[list[EmailCandidate]] | li
 
 @dataclass(frozen=True)
 class WalkBudget:
-    max_fetches: int = 8
-    max_depth: int = 3
-    stale_hops: int = 2
-    wall_clock_s: int = 600
+    max_fetches: int = 20
+    max_depth: int = 4
+    stale_hops: int = 3
+    wall_clock_s: int = 1200
 
 
 @dataclass
