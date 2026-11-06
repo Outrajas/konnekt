@@ -304,6 +304,49 @@ def _migration_add_research_edges(conn: sqlite3.Connection) -> None:
 MIGRATIONS.append(_migration_add_research_edges)
 
 
+def _migration_add_salary_provenance(conn: sqlite3.Connection) -> None:
+    """Add salary provenance columns to databases created before live pay research."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(job)").fetchall()}
+    for name, sqltype in {
+        "salary_raw": "TEXT",
+        "salary_evidence_url": "TEXT",
+        "salary_retrieved_at": "TEXT",
+        "salary_extraction_method": "TEXT",
+        "salary_search_status": "TEXT",
+    }.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE job ADD COLUMN {name} {sqltype}")
+    conn.commit()
+
+
+MIGRATIONS.append(_migration_add_salary_provenance)
+
+
+def _migration_add_draft_table(conn: sqlite3.Connection) -> None:
+    """Create the draft table for review/reporting on existing databases."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS draft (
+            id INTEGER PRIMARY KEY,
+            person_id INTEGER REFERENCES person(id),
+            job_id INTEGER REFERENCES job(id),
+            email_candidate_id INTEGER,
+            subject TEXT NOT NULL,
+            body TEXT NOT NULL,
+            evidence_used_json TEXT NOT NULL DEFAULT '[]',
+            quality_notes TEXT,
+            draft_path TEXT,
+            created_at TEXT NOT NULL,
+            profile_id TEXT
+        );
+        """
+    )
+    conn.commit()
+
+
+MIGRATIONS.append(_migration_add_draft_table)
+
+
 def connect(path: str | Path) -> sqlite3.Connection:
     """Open a SQLite database with WAL and foreign-key enforcement enabled."""
     database_path = str(path)

@@ -70,6 +70,32 @@ def test_callable_migration_skips_existing_columns(temp_db):
         conn.close()
 
 
+def test_legacy_v10_database_receives_live_run_tables_and_columns(temp_db):
+    """Existing databases get schema added after the original v10 release."""
+    conn = connect(temp_db)
+    try:
+        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+        for version, migration in enumerate(MIGRATIONS[:10], start=1):
+            if isinstance(migration, str):
+                conn.executescript(migration)
+            else:
+                migration(conn)
+            conn.execute("DELETE FROM schema_version")
+            conn.execute("INSERT INTO schema_version(version) VALUES (?)", (version,))
+            conn.commit()
+
+        assert schema_version(conn) == 10
+        init_schema(conn)
+
+        job_columns = {row[1] for row in conn.execute("PRAGMA table_info(job)").fetchall()}
+        assert "salary_search_status" in job_columns
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='draft'"
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+
 def test_all_migrations_are_str_or_callable():
     for i, m in enumerate(MIGRATIONS, start=1):
         assert isinstance(m, str) or callable(m), (
