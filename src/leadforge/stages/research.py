@@ -604,6 +604,24 @@ async def research_company(
                 if result.queries_used >= budget.max_queries
                 else "no_more_queries"
             )
+    # NEW: Agentic fallback - if no people found via snippets, use LLM-guided crawl
+    if not people_by_name and not dry_run:
+        from leadforge.sources.people_agent import find_people_agentic
+        try:
+            agentic_result = await find_people_agentic(
+                company=company,
+                start_url=f"https://{domain}/about",
+                goal="find HR, talent acquisition, or engineering managers",
+                max_pages=5,
+                max_tokens=15_000,
+            )
+            for person in agentic_result.people:
+                if person.name.lower() not in people_by_name:
+                    people_by_name[person.name.lower()] = person
+            result.stop_reason += f"; agentic_found={len(agentic_result.people)}"
+        except Exception as exc:
+            result.stop_reason += f"; agentic_error={type(exc).__name__}"
+
     finally:
         for candidate in people_by_name.values():
             result.people.append(candidate)
